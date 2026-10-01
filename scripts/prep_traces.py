@@ -207,7 +207,127 @@ def load_carboncast(src, regions, hours, start_hour):
     rows.sort(key=lambda r: (r[0], r[1]))
     print(f"carbon window: {base} + {hours}h "
           f"(common span {span}h from {common_start})")
-    return rows
+    # base is returned so a paired forecast trace (see load_carboncast_forecast)
+    # can be indexed to the identical wall-clock hours -- the two traces are
+    # only a valid "perfect vs forecast" comparison if hour h means the same
+    # instant in both.
+    return rows, base
+
+
+def load_carboncast_forecast(src, regions, hours, base, lead_hour=24):
+    """
+    Read CarbonCast's paired actual/forecast lifecycle files into the
+    planning-trace rows used for Paper B's realistic-foresight arm.
+
+    Expected files: <REGION>_carbon_from_src_forecasts_lifecycle_Jul_Dec_2021.csv,
+    or for some regions <REGION>_carbon_from_src_prod_forecasts_lifecycle_Jul_Dec_2021.csv
+    (CarbonCast's own naming is inconsistent across regions; both are tried).
+    These cover only Jul-Dec 2021, a subset of the 2020-2021 window the ground-
+    truth lifecycle_emissions.csv files span -- --start-hour/--hours must land
+    inside Jul-Dec 2021 or this will fail loudly below.
+
+    Each file is NOT one row per target hour. It is CarbonCast's 96-hour-ahead
+    forecast reissued daily, so a given target hour is covered by up to four
+    overlapping forecasts at different lead times (1..96h, from four different
+    issue runs). Mixing lead times within one trace would make "the forecast"
+    an undefined blend of prediction horizons, so only the forecast issued
+    exactly `lead_hour` hours ahead of each target hour is kept -- default 24h,
+    i.e. the standard day-ahead forecast.
+
+    Lead hour is derived from each row's position within its 96-row issue
+    block, and blocks are detected from the UTC time deltas (a new block
+    starts wherever consecutive rows are not 1h apart) rather than assumed
+    from row position -- a resorted or edited file then fails loudly instead
+    of silently mis-attributing a lead time to the wrong forecast.
+
+    Because reissue is daily (every 24h) rather than hourly, an *exact* lead
+    of `lead_hour` only exists for one hour-of-day; every other target hour's
+    available leads sit at `lead_hour` +/- a multiple of 24h (e.g. for
+    lead_hour=24: some hours only ever see {24, 48, 72, 96}, others only
+    {1, 25, 49, 73}). Requiring an exact match would therefore produce a
+    trace with real values at 1-in-24 hours and gaps everywhere else. Instead
+    the lead *closest* to `lead_hour` is kept per target hour, which stays
+    within +/-12h of the request at every hour and is how this reissue-daily
+    product is actually meant to be read: the freshest available forecast for
+    that hour, not a single fixed horizon repeated hourly.
+    """
+    import datetime as _dt
+
+    def parse_ts(raw):
+        raw = raw.strip()
+        for fmt in ("%m/%d/%Y %H:%M:%S", "%Y-%m-%d %H:%M:%S%z", "%Y-%m-%d %H:%M:%S"):
+            try:
+                ts = _dt.datetime.strptime(raw, fmt)
+                return ts.replace(tzinfo=None) if ts.tzinfo is None \
+                    else ts.astimezone(_dt.timezone.utc).replace(tzinfo=None)
+            except ValueError:
+                continue
+        raise SystemExit(f"unparseable timestamp {raw!r} in a forecast file under {src}")
+
+    suffixes = (
+        "_carbon_from_src_forecasts_lifecycle_Jul_Dec_2021.csv",
+        "_carbon_from_src_prod_forecasts_lifecycle_Jul_Dec_2021.csv",
+    )
+
+    lookup_by_region = {}
+    for region in regions:
+        path = next((src / f"{region}{suf}" for suf in suffixes
+                     if (src / f"{region}{suf}").exists()), None)
+        if path is None:
+            raise SystemExit(
+                f"missing forecast file for {region} in {src}\n"
+                f"Expected one of: " + ", ".join(f"{region}{s}" for s in suffixes) + "\n"
+                f"Download CarbonCast's data/ directory (carbonfirst/CarbonCast on GitHub) "
+                f"into {src}.")
+
+        with path.open(newline="") as fh:
+            reader = csv.DictReader(fh)
+            need = {"UTC time", "forecasted_carbon_intensity_lifecycle"}
+            if not need.issubset(reader.fieldnames or ()):
+                raise SystemExit(f"{path} lacks {need} columns")
+            raw_rows = [(parse_ts(r["UTC time"]), r["forecasted_carbon_intensity_lifecycle"])
+                        for r in reader
+                        if r["forecasted_carbon_intensity_lifecycle"] not in ("", None)]
+
+        by_target_ts = {}   # target timestamp -> {lead_hour: forecast value}
+        block_start = None
+        prev_ts = None
+        pos_in_block = 0
+        for ts, val in raw_rows:
+            if prev_ts is None or (ts - prev_ts).total_seconds() != 3600:
+                if block_start is not None and pos_in_block != 96:
+                    raise SystemExit(
+                        f"{path}: issue block starting {block_start} has "
+                        f"{pos_in_block} rows, expected 96 -- this file does not "
+                        f"match CarbonCast's daily 96h-ahead forecast format.")
+                block_start = ts
+                pos_in_block = 0
+            pos_in_block += 1
+            by_target_ts.setdefault(ts, {})[pos_in_block] = float(val)
+            prev_ts = ts
+
+        # Per target hour, keep the forecast whose lead is nearest lead_hour
+        # (ties broken toward the shorter lead). See the docstring note above
+        # on why an exact match is not available at every hour.
+        lookup_by_region[region] = {
+            ts: min(leads.items(), key=lambda kv: (abs(kv[0] - lead_hour), kv[0]))[1]
+            for ts, leads in by_target_ts.items()}
+
+    out = []
+    for region in regions:
+        lookup = lookup_by_region[region]
+        for h in range(hours):
+            ts = base + _dt.timedelta(hours=h)
+            ci = lookup.get(ts)
+            if ci is None:
+                raise SystemExit(
+                    f"{region} has no forecast of any lead at {ts}. CarbonCast's "
+                    f"forecast files only cover Jul-Dec 2021 -- narrow "
+                    f"--start-hour/--hours to fall inside that window.")
+            out.append((h, region, round(ci, 2)))
+    out.sort(key=lambda r: (r[0], r[1]))
+    print(f"forecast window: {base} + {hours}h, lead_hour={lead_hour}")
+    return out
 
 
 # Top-bucket substitutes for the Azure V2 trace. The dataset encodes its
@@ -408,6 +528,16 @@ def main():
                     help="restrict to one Azure workload class")
     ap.add_argument("--region-set", choices=sorted(REAL_REGION_SETS),
                     help="named CarbonCast region set (overrides --regions)")
+    ap.add_argument("--forecast", action="store_true",
+                    help="also write carbon_intensity_forecast.csv (Paper B's "
+                         "realistic-foresight arm), from CarbonCast's paired "
+                         "actual/forecast files. Requires --mode real; the "
+                         "requested window must fall inside Jul-Dec 2021.")
+    ap.add_argument("--lead-hour", type=int, default=24,
+                    help="forecast lead time to use with --forecast, in hours "
+                         "(1-96; CarbonCast reissues a 96h-ahead forecast "
+                         "daily). Default 24h matches the deadline-margin "
+                         "framing used elsewhere in this harness.")
     args = ap.parse_args()
 
     if args.region_set:
@@ -420,15 +550,29 @@ def main():
                 f"Not CarbonCast regions: {sorted(unknown)}\n"
                 f"Available: {sorted(CARBONCAST_REGIONS)}\n"
                 f"Named sets: {sorted(REAL_REGION_SETS)}")
-        ci_rows = load_carboncast(args.carbon_src, args.regions,
-                                  args.hours, args.start_hour)
+        ci_rows, ci_base = load_carboncast(args.carbon_src, args.regions,
+                                           args.hours, args.start_hour)
     else:
+        if args.forecast:
+            raise SystemExit("--forecast requires --mode real")
         unknown = set(args.regions) - set(REGION_PROFILES)
         if unknown:
             raise SystemExit(f"No profile for region(s): {sorted(unknown)}")
         ci_rows = synth_carbon(args.regions, args.hours, args.seed)
+        ci_base = None
     write_csv(args.out / "carbon_intensity.csv",
               ["hour", "region", "ci_gco2_per_kwh"], ci_rows)
+
+    # Paper B's realistic-foresight arm: a second trace, indexed to the
+    # identical wall-clock hours as carbon_intensity.csv (ci_base), carrying
+    # CarbonCast's own lead_hour-ahead forecast instead of the observed value.
+    # Written only on request -- Paper A's pipeline neither needs nor should
+    # depend on these files being present.
+    if args.forecast:
+        fc_rows = load_carboncast_forecast(args.carbon_src, args.regions,
+                                           args.hours, ci_base, args.lead_hour)
+        write_csv(args.out / "carbon_intensity_forecast.csv",
+                  ["hour", "region", "ci_gco2_per_kwh"], fc_rows)
 
     # VM requests remain synthetic even in --mode real: the Azure Resource
     # Central conversion is a separate step. Any run mixing real CI with these
@@ -457,6 +601,8 @@ def main():
         "vm_source": str(args.vm_src) if args.vm_src else "synthetic",
         "vm_category": args.vm_category or "all",
         "min_duration_h": args.min_duration_h,
+        "has_forecast": args.forecast,
+        "forecast_lead_h": args.lead_hour if args.forecast else "n/a",
     })
 
     # Sanity summary: if the spread across regions is small, no space-shifting

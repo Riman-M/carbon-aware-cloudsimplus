@@ -69,6 +69,6 @@ venv/
 .DS_Store
 Thumbs.db
 desktop.ini
-
+COMMIT_MSG.txt
 # Paper sources are kept out of the public repository until publication.
 paper/

@@ -33,12 +33,11 @@ public final class Simulator {
     // Host spec after Zanotto et al.: Dell PowerEdge XR8620T, Xeon Gold 6433N,
     // 32 cores @ 2.00 GHz, 256 GB. The simulated host matches the benchmarked
     // one exactly, so the power curve below needs no rescaling.
-    public static final int    HOST_PES     = 32;
-    public static final double HOST_MIPS    = 2000;
-    public static final long   HOST_RAM_MB  = 256L * 1024;
-    public static final long   HOST_BW_MBPS = 10_000;
-    public static final long   HOST_STORAGE = 1_000_000;
-
+    public static final int HOST_PES = 32;
+    public static final double HOST_MIPS = 2000;
+    public static final long HOST_RAM_MB = 256L * 1024;
+    public static final long HOST_BW_MBPS = 10_000;
+    public static final long HOST_STORAGE = 1_000_000;
 
     private static final double SCHEDULING_INTERVAL_SEC = 300;
 
@@ -51,7 +50,8 @@ public final class Simulator {
     /**
      * Seconds an idle VM is kept before destruction.
      *
-     * <p>CloudSim Plus's default is -1, meaning a VM is torn down the instant it
+     * <p>
+     * CloudSim Plus's default is -1, meaning a VM is torn down the instant it
      * goes idle. A VM created at its submission delay is momentarily idle before
      * the broker dispatches its bound cloudlet, which can destroy it before it
      * ever runs -- the run then reports near-zero dynamic power with no error.
@@ -63,7 +63,8 @@ public final class Simulator {
     /**
      * Hosts provisioned per region.
      *
-     * <p><b>Changed:</b> the sizing basis is now fixed across the whole sweep --
+     * <p>
+     * <b>Changed:</b> the sizing basis is now fixed across the whole sweep --
      * it is driven by the <em>largest</em> capacity cap the experiment will run,
      * not by the cap of the current cell. Sizing per cell coupled fleet size to
      * the capacity axis, so total emissions rose with the cap simply because more
@@ -73,7 +74,8 @@ public final class Simulator {
      * represent. The attributed and dynamic bases are unaffected either way, since
      * they already discount hosts that are not running anything.
      *
-     * <p>Sizing is driven by the largest VM in the workload,
+     * <p>
+     * Sizing is driven by the largest VM in the workload,
      * not the mean. The cap bounds the <em>number</em> of concurrent VMs, not
      * their size, and CloudSim Plus places per host rather than from a pool -- a
      * 128 GB VM needs one host with 128 GB free. With this trace the mean VM is
@@ -90,16 +92,23 @@ public final class Simulator {
     }
 
     public static Metrics run(
-        final CarbonTrace groundTruth,
-        final CarbonTrace planningTrace,   // pass groundTruth for the perfect-foresight arm
-        final List<VmRequest> requests,
-        final Planner planner,
-        final List<String> eligibleRegions,
-        final String regionSetName,
-        final Map<String, Integer> capByRegion,
-        final int fleetSizingCapPerRegion,   // largest per-region cap in the sweep
-        final int deadlineMarginH
-    ) {
+            final CarbonTrace groundTruth,
+            final List<VmRequest> requests,
+            final Planner planner,
+            final String foresight, // "perfect" or "forecast" -- caller's label, see note below
+            final List<String> eligibleRegions,
+            final String regionSetName,
+            final Map<String, Integer> capByRegion,
+            final int fleetSizingCapPerRegion, // largest per-region cap in the sweep
+            final int deadlineMarginH) {
+        // There used to be a second CarbonTrace parameter here ("planningTrace,
+        // pass groundTruth for the perfect-foresight arm") that this method never
+        // actually read -- every placement decision comes from the trace baked
+        // into `planner` at construction time (see Planners.java), not from an
+        // argument to run(). That made the parameter dead code: changing it did
+        // nothing. The real foresight/forecast switch lives in ExperimentRunner,
+        // where `planner` is built; `foresight` here is purely a label for the
+        // results row, kept in sync with that choice by the caller.
         // ---- 1. Plan every request against the capacity ledger ----
         final RegionLedger ledger = new RegionLedger(capByRegion, groundTruth.horizonHours());
 
@@ -114,10 +123,11 @@ public final class Simulator {
             final Placement p = planner.plan(req, eligibleRegions, ledger);
             ledger.place(p.region(), p.startHour(), req.durationH());
             plan.put(req, p);
-            if (!p.meetsDeadline()) violations++;
-            overrunSum  += p.deadlineOverrunH();
+            if (!p.meetsDeadline())
+                violations++;
+            overrunSum += p.deadlineOverrunH();
             deferralSum += (p.startHour() - req.arrivalH());
-            vmHours     += req.durationH();
+            vmHours += req.durationH();
         }
         final double planMillis = (System.nanoTime() - planStart) / 1e6;
 
@@ -207,8 +217,8 @@ public final class Simulator {
             final long lengthMi = (long) (HOST_MIPS * req.durationH() * 3600.0);
             final Cloudlet cl = new CloudletSimple(req.id(), lengthMi, req.pes());
             cl.setUtilizationModelCpu(new UtilizationModelDynamic(1.0))
-              .setUtilizationModelRam(new UtilizationModelDynamic(0.5))
-              .setUtilizationModelBw(new UtilizationModelDynamic(0.1));
+                    .setUtilizationModelRam(new UtilizationModelDynamic(0.5))
+                    .setUtilizationModelBw(new UtilizationModelDynamic(0.1));
             cl.setVm(vm);
             cloudletsByRegion.get(pl.region()).add(cl);
         }
@@ -244,44 +254,49 @@ public final class Simulator {
         int notCreated = 0;
         for (final Vm vm : vms) {
             final Datacenter placed = actualDc.get(vm.getId());
-            if (placed == null) { notCreated++; continue; }
-            if (placed != targetDc.get(vm.getId())) misplaced++;
+            if (placed == null) {
+                notCreated++;
+                continue;
+            }
+            if (placed != targetDc.get(vm.getId()))
+                misplaced++;
         }
         final int finished = brokerByRegion.values().stream()
-            .mapToInt(b -> b.getCloudletFinishedList().size()).sum();
+                .mapToInt(b -> b.getCloudletFinishedList().size()).sum();
 
         return new Metrics(
-            planner.name(), regionSetName,
-            capByRegion.values().stream().mapToInt(Integer::intValue).max().orElse(0),
-            ledger.totalCapacity(),
-            deadlineMarginH,
-            meter.totalGrams(), meter.dynamicGrams(), meter.attributedGrams(),
-            meter.totalKwh(), meter.dynamicKwh(), meter.attributedKwh(),
-            requests.size(), vmHours,
-            violations,
-            requests.isEmpty() ? 0 : overrunSum / (double) requests.size(),
-            requests.isEmpty() ? 0 : deferralSum / (double) requests.size(),
-            ledger.maxRegionShare(),
-            ledger.peakConcurrency(),
-            hostsPerRegion,
-            meter.peakActiveHosts(),
-            planMillis,
-            misplaced,
-            notCreated,
-            finished);
+                planner.name(), foresight, regionSetName,
+                capByRegion.values().stream().mapToInt(Integer::intValue).max().orElse(0),
+                ledger.totalCapacity(),
+                deadlineMarginH,
+                meter.totalGrams(), meter.dynamicGrams(), meter.attributedGrams(),
+                meter.totalKwh(), meter.dynamicKwh(), meter.attributedKwh(),
+                requests.size(), vmHours,
+                violations,
+                requests.isEmpty() ? 0 : overrunSum / (double) requests.size(),
+                requests.isEmpty() ? 0 : deferralSum / (double) requests.size(),
+                ledger.maxRegionShare(),
+                ledger.peakConcurrency(),
+                hostsPerRegion,
+                meter.peakActiveHosts(),
+                planMillis,
+                misplaced,
+                notCreated,
+                finished);
     }
 
     private static List<Host> createHosts(final int count) {
         final List<Host> hosts = new ArrayList<>(count);
         for (int i = 0; i < count; i++) {
             final List<Pe> pes = new ArrayList<>(HOST_PES);
-            for (int p = 0; p < HOST_PES; p++) pes.add(new PeSimple(HOST_MIPS));
+            for (int p = 0; p < HOST_PES; p++)
+                pes.add(new PeSimple(HOST_MIPS));
             final Host host = new HostSimple(HOST_RAM_MB, HOST_BW_MBPS, HOST_STORAGE, pes);
             // Set so the simulator's own bookkeeping is well-formed. Emissions
             // are computed by CarbonMeter from the measured SpecPower curve, not
             // from this linear approximation -- see SpecPower for why.
             host.setPowerModel(new PowerModelHostSimple(
-                SpecPower.maxWatts(), SpecPower.idleWatts()));
+                    SpecPower.maxWatts(), SpecPower.idleWatts()));
             hosts.add(host);
         }
         return hosts;
