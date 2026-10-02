@@ -61,7 +61,7 @@ if not exist results\resonance mkdir results\resonance
 
 for %%s in (1 2 3 4 5) do (
   echo.
-  echo ######## seed %%s : July 2021 (sharp diurnal cycle) ########
+  echo ######## seed %%s : July 2021 - sharp diurnal cycle ########
   %PREP% --mode real --carbon-src %CC% --region-set us %AZURE% %BASE% %FC% --start-hour 13128 --seed %%s
   if errorlevel 1 goto :failed
   call mvn -q exec:java %CELLS% "-Dexec.args=data results/resonance/jul_seed%%s.csv"
@@ -70,7 +70,7 @@ for %%s in (1 2 3 4 5) do (
 
 for %%s in (1 2 3) do (
   echo.
-  echo ######## seed %%s : December 2021 (flat diurnal cycle) ########
+  echo ######## seed %%s : December 2021 - flat diurnal cycle ########
   %PREP% --mode real --carbon-src %CC% --region-set us %AZURE% %BASE% %FC% --start-hour 16800 --seed %%s
   if errorlevel 1 goto :failed
   call mvn -q exec:java %CELLS% "-Dexec.args=data results/resonance/dec_seed%%s.csv"
