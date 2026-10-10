@@ -2,36 +2,17 @@
 """
 Measure the deadline-margin resonance in the perfect-foresight planner.
 
-Reads results/resonance/{jul,dec}_seed*.csv (run_resonance.bat) and asks three
+Reads results/resonance/{jul,dec}_seed*.csv (run_resonance.bat) and asks four
 questions in order, each of which can kill the finding:
 
-1. Is the planner non-monotonic in deadline margin at all? More deadline
-   freedom strictly enlarges the feasible set, so a planner with perfect
-   information should never do worse with a longer margin. If it does, that
-   is a planner defect regardless of any explanation for it.
-
-2. Does the damage PEAK near margin=24, rather than simply growing with
-   margin? A peak is what the diurnal-resonance account predicts: at
-   margin=24 the start window spans exactly one diurnal cycle, so every VM
-   can reach the same daily minimum regardless of arrival time. A monotone
-   rise instead would point at something cumulative (horizon-edge effects,
-   deferral depth) and the resonance story would be wrong.
-
-3. Does the peak weaken when the diurnal cycle flattens? In the trace BPAT
-   swings ~35% of its mean across the day in July 2021 and only ~10% in
-   December. A mechanism driven by a sharp daily minimum must show a much
-   smaller July-vs-December peak. An equally strong peak in both seasons
-   falsifies the explanation even though the non-monotonicity would remain
-   real.
+1. Is the planner non-monotonic in deadline margin at all?
+2. Does the damage PEAK near margin=24, rather than simply growing with margin?
+3. Does the peak weaken when the diurnal cycle flattens?
+4. Does fleet synchronisation peak at the same margin as emissions?
 
 The headline statistic is the monotonicity VIOLATION: how much worse a cell
 is than the best result achieved at any SHORTER margin. Zero means more
-deadline freedom never hurt. It is computed per (season, seed, policy,
-capacity, arm) series and only then aggregated, so a violation is always a
-within-series comparison.
-
-Usage:
-    python scripts/analyze_resonance.py results/resonance
+deadline freedom never hurt.
 """
 import glob
 import os
@@ -42,9 +23,11 @@ from pathlib import Path
 import pandas as pd
 
 BASIS = "attributed_gco2"
-# Only policies that can time-shift can respond to a deadline margin at all.
-FLEX = lambda p: p == "space+time" or p.startswith("time@")
 SEASON_LABEL = {"jul": "July 2021 (sharp diurnal)", "dec": "December 2021 (flat diurnal)"}
+
+
+def FLEX(p):
+    return p == "space+time" or p.startswith("time@")
 
 
 def load(target):
@@ -83,13 +66,6 @@ def load(target):
 
 
 def violations(df, arm):
-    """
-    Per series, how much worse each margin is than the best SHORTER margin.
-
-    A series is one (season, seed, policy, capacity) at one foresight arm. The
-    comparison never crosses a series, so workload, trace and capacity are all
-    held fixed and only the deadline margin varies.
-    """
     d = df[(df.foresight == arm) & (df.policy.map(FLEX))]
     rows = []
     keys = ["season", "seed", "policy", "total_capacity"]
@@ -103,7 +79,6 @@ def violations(df, arm):
                          BASIS: v,
                          "share": r.max_region_share,
                          "deferral": r.mean_deferral_h,
-                         # undefined at the shortest margin: nothing shorter to beat
                          "violation_pct": float("nan") if best is None
                                           else 100 * (v / best - 1)})
             best = v if best is None else min(best, v)
@@ -156,7 +131,8 @@ def q2_peak(viol, arm):
         peak_m = by_m.idxmax()
         interior = peak_m not in (by_m.index.min(), by_m.index.max())
         print(f"\n    worst margin: {peak_m} ({by_m.max():+.2f}%)"
-              f"{'  -- an interior point, i.e. a genuine peak' if interior else '  -- an endpoint, NOT a peak'}")
+              + ("  -- an interior point, i.e. a genuine peak" if interior
+                 else "  -- an endpoint, NOT a peak"))
         if not interior:
             print("    -> a monotone rise, not a resonance. The diurnal account predicts")
             print("       a peak; this does not show one.")
@@ -172,11 +148,7 @@ def q3_season(viol):
               "Run the December half of run_resonance.bat.")
         return
 
-    # Each season's own peak may sit at a different margin, and comparing those
-    # would compare two different experiments. The hypothesis is specifically
-    # about the margin where July peaks (predicted: 24), so the seasonal test
-    # is run AT THAT MARGIN in both seasons.
-    print(f"\n  each season's own worst margin (context):")
+    print("\n  each season's own worst margin (context):")
     for season, g in v.groupby("season"):
         by_m = g.groupby("margin").violation_pct.mean()
         print(f"    {season:<5s} worst at margin {by_m.idxmax():<3d} ({by_m.max():+.2f}%)")
@@ -216,17 +188,8 @@ def q3_season(viol):
 
 def q4_mechanism(df):
     """
-    The direct test of the synchronisation account, using the temporal
-    concentration metrics rather than inferring from emissions alone.
-
-    max_region_share cannot settle this: a fleet wholly inside one region can
-    be spread through its days or piled into one hour of each, and both give a
-    share near 1. modal_start_hour_share and start_hour_entropy measure
-    agreement on a clock-hour; peak_to_mean_occupancy measures the resulting
-    crowding in absolute time.
-
-    If synchronisation drives the emissions peak, the clock-hour agreement must
-    peak at the SAME margin -- not merely be high everywhere.
+    Direct test of the synchronisation account, using the temporal concentration
+    metrics rather than inferring from emissions alone.
     """
     print("\n" + "=" * 70)
     print("Q4  does fleet synchronisation actually peak where emissions do?")
@@ -239,32 +202,66 @@ def q4_mechanism(df):
         print("  be tested and only the phenomenon itself can be reported.")
         return
 
+    # Split by capacity. The violation is an order of magnitude larger at the
+    # slack capacity, so pooling capacities averages the cell that carries the
+    # effect together with one that barely shows it and can report a spurious
+    # mismatch between the emissions peak and the concentration peak.
+    #
+    # round-robin never time-shifts, so its start-hour distribution IS the raw
+    # arrival distribution. A time-shifting policy is only "synchronised" if it
+    # exceeds that baseline, so the baseline is printed alongside.
     d = df[(df.foresight == "perfect") & (df.policy.map(FLEX))]
-    for season, g in d.groupby("season"):
-        print(f"\n  {SEASON_LABEL.get(season, season)}, perfect arm")
+    rr = df[df.policy == "round-robin"].groupby("season").modal_start_hour_share.mean()
+
+    for (season, cap), g in d.groupby(["season", "total_capacity"]):
+        base = rr.get(season, float("nan"))
+        print(f"\n  {SEASON_LABEL.get(season, season)}, cap={cap}, perfect arm"
+              f"   (arrival-pattern baseline modal={base:.3f})")
         t = g.groupby("deadline_margin_h").agg(
             attr=(BASIS, "mean"), modal=("modal_start_hour_share", "mean"),
-            entropy=("start_hour_entropy", "mean"),
             crowd=("peak_to_mean_occupancy", "mean"),
-            region=("max_region_share", "mean"))
-        print(f"    {'margin':>7s} {'attr_gco2':>11s} {'modal':>8s} {'entropy':>8s} "
-              f"{'crowd':>8s} {'regShare':>9s}")
+            hosts=("peak_active_hosts", "mean"),
+            akwh=("attributed_kwh", "mean"), dyn=("dynamic_gco2", "mean"),
+            dkwh=("dynamic_kwh", "mean"))
+        # Carbon per kWh ACTUALLY consumed. This is the decisive column: it
+        # divides out how much energy was drawn and how many hosts were lit,
+        # leaving only how dirty the chosen hours were. The attributed basis
+        # charges the idle floor of every active host, so a crowding effect
+        # could otherwise raise emissions mechanically, with no worse carbon
+        # timing at all.
+        t["ci"] = t.attr / t.akwh
+        t["ci_dyn"] = t.dyn / t.dkwh
+        print(f"    {'margin':>7s} {'attr_t':>9s} {'modal':>7s} {'vs_arr':>7s} "
+              f"{'crowd':>7s} {'hosts':>6s} {'CI':>7s} {'CI_dyn':>7s}")
         for m, r in t.iterrows():
-            print(f"    {m:7d} {r.attr:11.0f} {r.modal:8.3f} {r.entropy:8.3f} "
-                  f"{r.crowd:8.3f} {r.region:9.3f}")
+            print(f"    {m:7d} {r.attr / 1000:9.0f} {r.modal:7.3f} "
+                  f"{r.modal - base:+7.3f} {r.crowd:7.3f} {r.hosts:6.1f} "
+                  f"{r.ci:7.1f} {r.ci_dyn:7.1f}")
         if len(t) < 3:
             continue
-        am, mm, cm = t.attr.idxmax(), t.modal.idxmax(), t.crowd.idxmax()
-        print(f"\n    emissions peak at margin {am}; clock-hour agreement peaks at {mm}; "
-              f"crowding at {cm}")
-        print(f"    corr(emissions, modal share) = {t.attr.corr(t.modal):+.3f}, "
-              f"corr(emissions, crowding) = {t.attr.corr(t.crowd):+.3f}")
-        if am == mm:
-            print("    -> they coincide: synchronisation is a credible driver here.")
+        am, mm, cm, him = (t.attr.idxmax(), t.modal.idxmax(),
+                           t.crowd.idxmax(), t.ci.idxmax())
+        print(f"\n    peaks -> emissions:{am}  clock-hour agreement:{mm}  "
+              f"crowding:{cm}  realised CI:{him}")
+        print(f"    corr(emissions, modal)={t.attr.corr(t.modal):+.3f}  "
+              f"corr(emissions, crowding)={t.attr.corr(t.crowd):+.3f}  "
+              f"corr(crowding, CI)={t.crowd.corr(t.ci):+.3f}")
+        if him == am and t.hosts.idxmax() != am:
+            print("    -> realised CI peaks WITH emissions while the active-host count")
+            print("       does not, so the planner genuinely chose dirtier hours. The")
+            print("       effect is carbon timing, not the attributed basis lighting")
+            print("       more machines.")
+        elif him != am:
+            print("    -> realised CI does NOT peak with emissions: the rise is coming")
+            print("       from energy drawn or hosts lit, not from dirtier hours. Do not")
+            print("       describe this as a carbon-timing effect.")
+        if mm == am and (t.modal.max() - base) > 0:
+            print("    -> clock-hour agreement also peaks here and exceeds the arrival")
+            print("       baseline, so fleet synchronisation is a credible driver.")
         else:
-            print(f"    -> they do NOT coincide ({am} vs {mm}). Synchronisation alone does")
-            print("       not explain the emissions peak; report the phenomenon and say")
-            print("       the mechanism is open rather than asserting this one.")
+            print("    -> clock-hour agreement does not line up or stays below the")
+            print("       arrival baseline, so describe the mechanism as temporal")
+            print("       crowding rather than clock-hour resonance in this cell.")
 
 
 def arms_contrast(viol_p, viol_f):
