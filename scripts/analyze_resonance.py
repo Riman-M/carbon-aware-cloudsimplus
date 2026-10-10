@@ -214,6 +214,59 @@ def q3_season(viol):
         print("     else; investigate before reporting.")
 
 
+def q4_mechanism(df):
+    """
+    The direct test of the synchronisation account, using the temporal
+    concentration metrics rather than inferring from emissions alone.
+
+    max_region_share cannot settle this: a fleet wholly inside one region can
+    be spread through its days or piled into one hour of each, and both give a
+    share near 1. modal_start_hour_share and start_hour_entropy measure
+    agreement on a clock-hour; peak_to_mean_occupancy measures the resulting
+    crowding in absolute time.
+
+    If synchronisation drives the emissions peak, the clock-hour agreement must
+    peak at the SAME margin -- not merely be high everywhere.
+    """
+    print("\n" + "=" * 70)
+    print("Q4  does fleet synchronisation actually peak where emissions do?")
+    print("=" * 70)
+    need = ["modal_start_hour_share", "start_hour_entropy", "peak_to_mean_occupancy"]
+    missing = [c for c in need if c not in df.columns]
+    if missing:
+        print(f"\n  results predate the temporal-concentration metrics ({', '.join(missing)}).")
+        print("  Re-run the sweep after rebuilding; without these, the mechanism cannot")
+        print("  be tested and only the phenomenon itself can be reported.")
+        return
+
+    d = df[(df.foresight == "perfect") & (df.policy.map(FLEX))]
+    for season, g in d.groupby("season"):
+        print(f"\n  {SEASON_LABEL.get(season, season)}, perfect arm")
+        t = g.groupby("deadline_margin_h").agg(
+            attr=(BASIS, "mean"), modal=("modal_start_hour_share", "mean"),
+            entropy=("start_hour_entropy", "mean"),
+            crowd=("peak_to_mean_occupancy", "mean"),
+            region=("max_region_share", "mean"))
+        print(f"    {'margin':>7s} {'attr_gco2':>11s} {'modal':>8s} {'entropy':>8s} "
+              f"{'crowd':>8s} {'regShare':>9s}")
+        for m, r in t.iterrows():
+            print(f"    {m:7d} {r.attr:11.0f} {r.modal:8.3f} {r.entropy:8.3f} "
+                  f"{r.crowd:8.3f} {r.region:9.3f}")
+        if len(t) < 3:
+            continue
+        am, mm, cm = t.attr.idxmax(), t.modal.idxmax(), t.crowd.idxmax()
+        print(f"\n    emissions peak at margin {am}; clock-hour agreement peaks at {mm}; "
+              f"crowding at {cm}")
+        print(f"    corr(emissions, modal share) = {t.attr.corr(t.modal):+.3f}, "
+              f"corr(emissions, crowding) = {t.attr.corr(t.crowd):+.3f}")
+        if am == mm:
+            print("    -> they coincide: synchronisation is a credible driver here.")
+        else:
+            print(f"    -> they do NOT coincide ({am} vs {mm}). Synchronisation alone does")
+            print("       not explain the emissions peak; report the phenomenon and say")
+            print("       the mechanism is open rather than asserting this one.")
+
+
 def arms_contrast(viol_p, viol_f):
     print("\n" + "=" * 70)
     print("CONTRAST  does forecast noise suppress the peak?")
@@ -249,6 +302,7 @@ def main():
     q1_monotonic(vp, "perfect")
     q2_peak(vp, "perfect")
     q3_season(vp)
+    q4_mechanism(df)
 
     vf = violations(df, "forecast")
     if not vf.empty:
