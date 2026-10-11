@@ -5,7 +5,7 @@ Generate input traces for the carbon-aware CloudSim Plus harness.
 Two modes:
 
   synthetic  Produces plausible carbon-intensity and VM-request traces so the
-             harness runs immediately. NOT for publication -- results from
+             harness runs immediately. NOT for publication, because results from
              synthetic CI are not evidence about real grids.
 
   real       Converts CarbonCast per-region lifecycle-emission CSVs into the
@@ -40,7 +40,7 @@ from pathlib import Path
 #
 # Cross-region spread is 17.8x (SE 38 -> PL 674), which is what space-shifting
 # exploits. Within-region daily swing ranges from 10.6% (SE) to 63.6% (CISO),
-# which is what time-shifting exploits -- and unlike the synthetic generator,
+# which is what time-shifting exploits. Unlike the synthetic generator,
 # where every region got a similar amplitude, that variation is real and large
 # enough to be an experimental axis in its own right.
 CARBONCAST_REGIONS = {
@@ -142,7 +142,7 @@ def load_carboncast(src, regions, hours, start_hour):
     Timestamps are NOT in a single format across regions: some files use
     %m/%d/%Y %H:%M:%S, some ISO 8601, and DE carries an explicit +00:00 offset.
     They are parsed permissively and normalised to UTC, then checked for
-    completeness rather than trusted -- a silently short region would shift every
+    completeness rather than trusted, since a silently short region would shift every
     later hour and corrupt the cross-region alignment the whole experiment rests
     on.
     """
@@ -208,7 +208,7 @@ def load_carboncast(src, regions, hours, start_hour):
     print(f"carbon window: {base} + {hours}h "
           f"(common span {span}h from {common_start})")
     # base is returned so a paired forecast trace (see load_carboncast_forecast)
-    # can be indexed to the identical wall-clock hours -- the two traces are
+    # can be indexed to the identical wall-clock hours. The two traces are
     # only a valid "perfect vs forecast" comparison if hour h means the same
     # instant in both.
     return rows, base
@@ -231,13 +231,13 @@ def load_carboncast_forecast(src, regions, hours, base, lead_hour=24):
     overlapping forecasts at different lead times (1..96h, from four different
     issue runs). Mixing lead times within one trace would make "the forecast"
     an undefined blend of prediction horizons, so only the forecast issued
-    exactly `lead_hour` hours ahead of each target hour is kept -- default 24h,
+    exactly `lead_hour` hours ahead of each target hour is kept. The default is 24h,
     i.e. the standard day-ahead forecast.
 
     Lead hour is derived from each row's position within its 96-row issue
     block, and blocks are detected from the UTC time deltas (a new block
     starts wherever consecutive rows are not 1h apart) rather than assumed
-    from row position -- a resorted or edited file then fails loudly instead
+    from row position, so a resorted or edited file fails loudly instead
     of silently mis-attributing a lead time to the wrong forecast.
 
     Because reissue is daily (every 24h) rather than hourly, an *exact* lead
@@ -298,7 +298,7 @@ def load_carboncast_forecast(src, regions, hours, base, lead_hour=24):
                 if block_start is not None and pos_in_block != 96:
                     raise SystemExit(
                         f"{path}: issue block starting {block_start} has "
-                        f"{pos_in_block} rows, expected 96 -- this file does not "
+                        f"{pos_in_block} rows, expected 96. This file does not "
                         f"match CarbonCast's daily 96h-ahead forecast format.")
                 block_start = ts
                 pos_in_block = 0
@@ -322,7 +322,7 @@ def load_carboncast_forecast(src, regions, hours, base, lead_hour=24):
             if ci is None:
                 raise SystemExit(
                     f"{region} has no forecast of any lead at {ts}. CarbonCast's "
-                    f"forecast files only cover Jul-Dec 2021 -- narrow "
+                    f"forecast files only cover Jul-Dec 2021; narrow "
                     f"--start-hour/--hours to fall inside that window.")
             out.append((h, region, round(ci, 2)))
     out.sort(key=lambda r: (r[0], r[1]))
@@ -372,7 +372,7 @@ def load_azure(path, count, hours, margin, seed, min_duration_h, category):
     Reservoir sampling, not head -n: the file is not shuffled, so taking the
     first N rows would sample whatever ordering Azure wrote it in.
 
-    Right-censored VMs -- those still alive at the end of the trace -- are
+    Right-censored VMs, meaning those still alive at the end of the trace, are
     dropped, because their duration is unknown and treating the truncation point
     as a completion would silently shorten exactly the long-running VMs that
     carbon-aware scheduling is supposed to target.
@@ -566,7 +566,7 @@ def main():
     # Paper B's realistic-foresight arm: a second trace, indexed to the
     # identical wall-clock hours as carbon_intensity.csv (ci_base), carrying
     # CarbonCast's own lead_hour-ahead forecast instead of the observed value.
-    # Written only on request -- Paper A's pipeline neither needs nor should
+    # Written only on request, because Paper A's pipeline neither needs nor should
     # depend on these files being present.
     if args.forecast:
         fc_rows = load_carboncast_forecast(args.carbon_src, args.regions,
@@ -576,7 +576,7 @@ def main():
 
     # VM requests remain synthetic even in --mode real: the Azure Resource
     # Central conversion is a separate step. Any run mixing real CI with these
-    # requests must say so -- the workload shape (6-24h uniform durations, sizes
+    # requests must say so, because the workload shape (6-24h uniform durations, sizes
     # drawn independently of arrival time) is an assumption, not an observation.
     if args.vm_src:
         req_rows = load_azure(args.vm_src, args.requests, args.hours,
@@ -620,7 +620,7 @@ def main():
     # Repeatable diurnal amplitude: the spread of hour-of-day means.
     #
     # Window max-min is a poor proxy for what a deadline-bounded deferral can
-    # exploit, because it is dominated by one-off noise excursions -- it scores
+    # exploit, because it is dominated by one-off noise excursions. It scores
     # synthetic and real DE as near-identical (110% vs 116%) when their
     # exploitable structure differs by 4x. Averaging over hour-of-day cancels the
     # noise and leaves only the cycle a time-shifting policy can actually plan

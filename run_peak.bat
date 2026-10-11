@@ -17,8 +17,8 @@ REM
 REM  1. Resolves the peak. The main sweep sampled 24 then 27 then 30, so
 REM     the peak's position is known only to +/-3h and its shape not at
 REM     all. Margins 24..29 at 1h steps settle both. 12 and 18 are kept
-REM     as anchors so the violation statistic -- which compares each
-REM     margin against the best SHORTER margin in its own series -- has
+REM     as anchors so the violation statistic, which compares each
+REM     margin against the best SHORTER margin in its own series, has
 REM     the same baseline as the main sweep and the numbers stay
 REM     comparable to it.
 REM
@@ -26,7 +26,7 @@ REM  2. Tests the duration account. The planner minimises MEAN carbon
 REM     intensity over a VM's whole run window, not the CI at its start
 REM     instant. So to sit a VM of duration D inside the daily trough,
 REM     the reachable start set plausibly needs the diurnal period PLUS
-REM     room to fit D -- which would put the peak above 24 and make its
+REM     room to fit D, which would put the peak above 24 and make its
 REM     position depend on D.
 REM
 REM     THE PREDICTION, stated before the run: with a longer-duration
@@ -42,7 +42,7 @@ REM     also make the cell tighter and confound duration with capacity
 REM     pressure. CHECK THIS: the prep step prints "demand=... VM-hours"
 REM     for both variants. They should land within a few percent of each
 REM     other. If they do not, adjust --requests on the long variant and
-REM     re-run that half -- the comparison is only clean at matched
+REM     re-run that half, because the comparison is only clean at matched
 REM     demand.
 REM
 REM  Only cap=350 and only July: that is the cell carrying the effect

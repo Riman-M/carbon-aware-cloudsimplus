@@ -54,7 +54,7 @@ public final class Simulator {
      * <p>CloudSim Plus's default is -1, meaning a VM is torn down the instant it
      * goes idle. A VM created at its submission delay is momentarily idle before
      * the broker dispatches its bound cloudlet, which can destroy it before it
-     * ever runs -- the run then reports near-zero dynamic power with no error.
+     * ever runs, and the run then reports near-zero dynamic power with no error.
      * A small positive delay closes that window while still releasing capacity
      * promptly once work finishes.
      */
@@ -75,7 +75,7 @@ public final class Simulator {
      *
      * <p>Sizing is driven by the largest VM in the workload,
      * not the mean. The cap bounds the <em>number</em> of concurrent VMs, not
-     * their size, and CloudSim Plus places per host rather than from a pool -- a
+     * their size, and CloudSim Plus places per host rather than from a pool, so a
      * 128 GB VM needs one host with 128 GB free. With this trace the mean VM is
      * 6.3 vCPU / 29.7 GB but the largest is 16 vCPU / 128 GB, so mean-based
      * sizing under-provisioned by roughly 3x and creation failed. When the mapped
@@ -93,7 +93,7 @@ public final class Simulator {
         final CarbonTrace groundTruth,
         final List<VmRequest> requests,
         final Planner planner,
-        final String foresight,   // "perfect" or "forecast" -- caller's label, see note below
+        final String foresight,   // "perfect" or "forecast"; caller's label, see below
         final List<String> eligibleRegions,
         final String regionSetName,
         final Map<String, Integer> capByRegion,
@@ -102,7 +102,7 @@ public final class Simulator {
     ) {
         // There used to be a second CarbonTrace parameter here ("planningTrace,
         // pass groundTruth for the perfect-foresight arm") that this method never
-        // actually read -- every placement decision comes from the trace baked
+        // actually read. Every placement decision comes from the trace baked
         // into `planner` at construction time (see Planners.java), not from an
         // argument to run(). That made the parameter dead code: changing it did
         // nothing. The real foresight/forecast switch lives in ExperimentRunner,
@@ -137,7 +137,7 @@ public final class Simulator {
 
         final Map<String, Datacenter> dcByRegion = new LinkedHashMap<>();
         final Map<Datacenter, String> regionOf = new LinkedHashMap<>();
-        // Identical in every cell of the sweep -- see hostsFor().
+        // Identical in every cell of the sweep; see hostsFor().
         final int hostsPerRegion = hostsFor(fleetSizingCapPerRegion, maxPes, maxRam);
         for (final String region : eligibleRegions) {
             final Datacenter dc = new DatacenterSimple(sim, createHosts(hostsPerRegion));
@@ -171,7 +171,7 @@ public final class Simulator {
         // Keyed by VM id, not by Vm.
         //
         // CloudSim Plus derives Vm.equals/hashCode from the id *and the broker*,
-        // and the broker is assigned during submitVmList -- after these entries are
+        // and the broker is assigned during submitVmList, after these entries are
         // inserted. A Vm key therefore changes its hash while sitting in the map,
         // every post-simulation lookup misses, and each VM is scored as misplaced
         // even when it ran exactly where planned. Request ids are globally unique,
@@ -234,7 +234,7 @@ public final class Simulator {
         // addOnVmsCreatedListener fires only once the broker has created *all* its
         // waiting VMs. Where capacity binds, some VMs are deferred past the
         // measurement window and never created, the condition is never met, and
-        // the listener never fires -- so the cells that matter most reported every
+        // the listener never fires, so the cells that matter most reported every
         // VM as uncreated while their cloudlets were visibly completing. The
         // created list is cumulative and survives VM destruction, and since each
         // broker is pinned to exactly one datacenter, membership in that list is
@@ -290,7 +290,7 @@ public final class Simulator {
             final Host host = new HostSimple(HOST_RAM_MB, HOST_BW_MBPS, HOST_STORAGE, pes);
             // Set so the simulator's own bookkeeping is well-formed. Emissions
             // are computed by CarbonMeter from the measured SpecPower curve, not
-            // from this linear approximation -- see SpecPower for why.
+            // from this linear approximation; see SpecPower for why.
             host.setPowerModel(new PowerModelHostSimple(
                 SpecPower.maxWatts(), SpecPower.idleWatts()));
             hosts.add(host);

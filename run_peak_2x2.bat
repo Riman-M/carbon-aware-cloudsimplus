@@ -8,8 +8,8 @@ REM  WHY THIS RUN EXISTS
 REM  run_peak.bat refuted the duration prediction, but not cleanly. It
 REM  moved three things at once: median duration (8h -> mean 63h), VM
 REM  count (1000 -> 540, to hold demand) and demand itself (+11.4%).
-REM  The mechanism is crowding -- how many planners compete for the same
-REM  hours -- so VM count is a plausible driver entirely on its own, and
+REM  The mechanism is crowding, that is, how many planners compete for the
+REM  same hours, so VM count is a plausible driver on its own, and
 REM  that run cannot tell the two apart.
 REM
 REM  THE 2x2
@@ -34,7 +34,7 @@ REM    both flat            -> count is necessary; duration may be too.
 REM    both peaked          -> neither alone explains it; look elsewhere.
 REM
 REM  Demand cannot be held fixed while both duration and count are
-REM  controlled -- the three are arithmetically linked. This design holds
+REM  controlled, because the three are arithmetically linked. This design holds
 REM  count and lets demand float, which is the right trade for a
 REM  contention mechanism. Cell C runs about 63,000 VM-hours, i.e. 25%
 REM  utilisation at cap=350 against A's 12%; still slack, but note it

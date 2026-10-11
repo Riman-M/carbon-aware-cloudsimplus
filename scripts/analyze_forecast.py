@@ -12,7 +12,7 @@ a paired (policy, cell) difference is attributable to the planning input alone.
 
 The framing is *retention*: the fraction of a policy's saving over the
 carbon-agnostic baseline that is left once foresight is imperfect. Raw
-degradation on its own understates the question -- a 3% rise in emissions
+degradation on its own understates the question, because a 3% rise in emissions
 means something different for a policy saving 5% than for one saving 50%.
 
 WITH MULTIPLE SEEDS, every effect is reported against its across-seed spread.
@@ -78,7 +78,7 @@ def load(target):
 
     if "foresight" not in df.columns:
         raise SystemExit(
-            "no 'foresight' column -- these results predate the forecast arm. "
+            "no 'foresight' column; these results predate the forecast arm. "
             "Re-run ExperimentRunner with a carbon_intensity_forecast.csv present.")
     arms = set(df.foresight.unique())
     if not {"perfect", "forecast"}.issubset(arms):
@@ -95,12 +95,12 @@ def load(target):
         for _, r in cells.iterrows():
             print(f"  cap={r.total_capacity} (per-region {r.per_region_cap}): {r.rows} rows")
         print("  A whole capacity level failing usually means it sits below the "
-              "workload's\n  mean concurrency and cannot be scheduled at all -- that "
+              "workload's\n  mean concurrency and cannot be scheduled at all. That "
               "cell is infeasible,\n  not merely tight, and removing it may remove the "
               "pressure the study is about.")
         df = df[df.placement_valid]
     if df.empty:
-        raise SystemExit("every row failed the placement check -- nothing to compare.")
+        raise SystemExit("every row failed the placement check, nothing to compare.")
     return df
 
 
@@ -156,7 +156,7 @@ def with_retention(df, pair):
 def seed_note(n_seeds):
     if n_seeds >= 3:
         return None
-    return ("  NOTE: %d seed%s. Every figure below is provisional -- with no\n"
+    return ("  NOTE: %d seed%s. Every figure below is provisional, since with no\n"
             "  across-seed spread to compare against, a 1-3%% effect cannot be\n"
             "  distinguished from workload sampling noise. Run\n"
             "  run_forecast_robust.bat before treating any of this as a result."
@@ -194,7 +194,7 @@ def direction_check(ret, n_seeds):
     """
     A forecast arm beating its perfect-foresight twin is a signal, not a win.
     Isolated cells can invert through packing luck. A cell that inverts at
-    EVERY seed cannot be luck, and points at a mechanism -- most plausibly
+    EVERY seed cannot be luck, and points at a mechanism, most plausibly
     greedy herding, where perfect foresight sends every VM at the same true
     CI minimum, they collide against the per-region cap, and the overflow
     spills into dirtier regions that forecast noise would have avoided.
@@ -216,7 +216,7 @@ def direction_check(ret, n_seeds):
         always = g[g["max"] < 0]
         print(f"\n  cells inverting at EVERY seed: {len(always)} of {len(g)}")
         if len(always):
-            print("  these are not sampling luck -- a mechanism is producing them:")
+            print("  these are not sampling luck; a mechanism is producing them:")
             for k, r in always.sort_values("mean").head(8).iterrows():
                 print(f"     {k[0]:<12s} cap={k[1]:<4d} m={k[2]:<3d}  "
                       f"{r['mean']:+6.2f}% +/- {r['std']:.2f}  (n={int(r['count'])})")
@@ -314,7 +314,7 @@ def by_pressure(ret, n_seeds):
             print(f"  -> NOT monotonic in capacity: the worst capacity is {worst}, an"
                   f"\n     interior point, not an endpoint. The endpoint comparison above"
                   f"\n     therefore describes a trend that does not exist. Slack alone"
-                  f"\n     does not explain this shape -- do not report it as if it did.")
+                  f"\n     does not explain this shape, so do not report it as if it did.")
         else:
             print("  -> monotonic in capacity, so the endpoint comparison is "
                   "representative.")

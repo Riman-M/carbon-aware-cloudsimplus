@@ -27,7 +27,7 @@ public record Metrics(
     double meanOverrunH,
     double meanDeferralH,
     double maxRegionShare,
-    // Temporal concentration -- see RegionLedger. maxRegionShare says WHERE the
+    // Temporal concentration; see RegionLedger. maxRegionShare says WHERE the
     // fleet went; these say whether it also went at the SAME TIME, which a
     // regional share cannot distinguish.
     double modalStartHourShare,

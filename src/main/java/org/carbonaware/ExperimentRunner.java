@@ -132,7 +132,7 @@ public final class ExperimentRunner {
         final List<VmRequest> base = RequestTrace.fromCsv(dataDir.resolve("vm_requests.csv"));
 
         // Paper B's realistic-foresight arm: planning against CarbonCast's own
-        // forecast instead of the ground truth. Optional -- Paper A's pipeline
+        // forecast instead of the ground truth. Optional; Paper A's pipeline
         // (and any run without scripts/prep_traces.py --forecast) has no use
         // for it and must keep working without the file present.
         final Path forecastPath = dataDir.resolve("carbon_intensity_forecast.csv");
@@ -239,7 +239,7 @@ public final class ExperimentRunner {
                     // WaitAwhile is pinned to a home region, so its result is a
                     // statement about that region as much as about deferral. With
                     // home fixed to regions.get(0) it drew SE for the eu set and
-                    // BPAT for us -- in both cases the cleanest grid available,
+                    // BPAT for us, in both cases the cleanest grid available,
                     // which handed the time-shifting policy the optimum for free
                     // and made every space-vs-time comparison uninterpretable.
                     // Sweeping the home region reports the whole distribution
@@ -320,8 +320,8 @@ public final class ExperimentRunner {
             System.out.println("placement check passed: every VM ran in its planned region and completed");
         }
 
-        // The total basis is policy-invariant by construction -- the same fleet is
-        // powered in the same regions regardless of placement -- so if the spread
+        // The total basis is policy-invariant by construction, since the same fleet
+        // is powered in the same regions regardless of placement, so if the spread
         // across policies is near zero, that is expected rather than a bug, and
         // the attributed basis is the one carrying the signal.
         reportSpread(results, "total",      Metrics::gramsPerVmHour);

@@ -35,8 +35,8 @@ import java.util.function.Function;
  *   3. sweeps the mitigation parameters and reports, for each, whether the
  *      non-monotonicity survives and what it cost in realised carbon intensity.
  *
- * The emissions figure here is a proxy -- sum over placed VMs of mean CI times
- * duration -- not the simulator's attributed basis. It is adequate to detect the
+ * The emissions figure here is a proxy, the sum over placed VMs of mean CI
+ * times duration, rather than the simulator's attributed basis. It is adequate to detect the
  * phenomenon and must not be quoted as a result.
  */
 public final class MitigationHarness {
@@ -139,7 +139,7 @@ public final class MitigationHarness {
             for (int i = 0; i < pa.size(); i++) if (!pa.get(i).equals(pb.get(i))) diffs++;
         }
         System.out.printf("  %-14s vs %-14s : %s (%d of %d placements differ)%n",
-            a, b, diffs == 0 ? "IDENTICAL -- control passes" : "*** MISMATCH ***",
+            a, b, diffs == 0 ? "IDENTICAL: control passes" : "*** MISMATCH ***",
             diffs, MARGINS.length * N_REQ);
         if (diffs != 0) throw new AssertionError("lambda=0 must reproduce space+time exactly");
     }
