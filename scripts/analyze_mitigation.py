@@ -234,6 +234,46 @@ def q1_removed(viol, df):
         print(f"  {p:<26} {r.height:>+8.2f} {r.se:>6.2f} {r.t:>6.1f} {int(r.n):>3}   "
               f"{r.maxV:>+7.2f}   {verdict}")
 
+    # Coverage check. The placement check removes whole cells, and it removes
+    # them unevenly: the baseline crowds work into the trough and so defers
+    # more of it past the horizon. A height averaged over series with holes in
+    # them is therefore not obviously comparable across policies, and the holes
+    # sit disproportionately in the rows that were worst. Recomputing over only
+    # those seeds whose plateau and both flanks survived settles whether the
+    # comparison rests on that unevenness.
+    need = set(plateau) | set(flanks)
+    crows = []
+    for pol, g in v.groupby("policy"):
+        per, seeds = [], []
+        for s, gs in g.groupby("seed"):
+            if not need <= set(gs.margin):
+                continue
+            per.append(gs[gs.margin.isin(plateau)].violation_pct.mean()
+                       - gs[gs.margin.isin(flanks)].violation_pct.mean())
+            seeds.append(s)
+        if len(per) < 2:
+            crows.append({"policy": pol, "height": float("nan"),
+                          "se": float("nan"), "n": len(per)})
+            continue
+        s2 = pd.Series(per)
+        crows.append({"policy": pol, "height": s2.mean(),
+                      "se": s2.std() / (len(s2) ** 0.5), "n": len(s2)})
+    c = pd.DataFrame(crows).set_index("policy")
+    print(f"\n  Recomputed over seeds with no missing cell at {sorted(int(x) for x in need)}:")
+    print(f"\n  {'policy':<26} {'height':>8} {'se':>6} {'n':>3}   {'shift vs above':>15}")
+    print("  " + "-" * 64)
+    for p in h.index:
+        if p not in c.index:
+            continue
+        r = c.loc[p]
+        if r.n < 2:
+            print(f"  {p:<26} {'--':>8} {'--':>6} {int(r.n):>3}   too few complete seeds")
+            continue
+        print(f"  {p:<26} {r.height:>+8.2f} {r.se:>6.2f} {int(r.n):>3}   "
+              f"{r.height - h.loc[p, 'height']:>+15.2f}")
+    print("\n  A baseline that holds up here is not an artifact of which cells")
+    print("  survived. A baseline that only appears on the full set would be.")
+
     print("\n  maxV is shown only for continuity with analyze_resonance.py. It is")
     print("  biased upward on a flat series, so it must not be read as a residual")
     print("  defect; height is the statistic to quote.")
