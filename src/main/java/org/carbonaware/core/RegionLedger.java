@@ -174,7 +174,7 @@ public final class RegionLedger {
      * higher means the same VM-hours are crowded into fewer hours of that span.
      *
      * <p>Where {@link #modalStartHourShare()} measures agreement on a clock-hour,
-     * this measures the resulting crowding in absolute time -- the thing that
+     * this measures the resulting crowding in absolute time, which is what
      * actually drives contention against the per-region cap.
      *
      * <p>The mean is deliberately taken over the whole span rather than over
@@ -182,6 +182,15 @@ public final class RegionLedger {
      * that runs in one tight burst per day look perfectly level, because every
      * hour it does occupy is equally full; the idle hours it crowded out of are
      * exactly the signal, so they have to stay in the denominator.
+     *
+     * <p><b>Read this with {@link #maxRegionShare()}.</b> Restricting to the
+     * busiest region is only equivalent to measuring the fleet while the fleet
+     * is in one region, which is the regime every policy studied in Paper A
+     * occupies. A policy that disperses spatially leaves the busiest region
+     * holding a thin, spiky remainder, and this figure then rises for a reason
+     * that has nothing to do with temporal crowding. Use
+     * {@link #fleetPeakToMeanOccupancy()} whenever the comparison includes a
+     * policy whose regional share is materially below one.
      */
     public double peakToMeanOccupancy() {
         final String busiest = placedCount.entrySet().stream()
@@ -195,6 +204,39 @@ public final class RegionLedger {
             peak = Math.max(peak, occ[h]);
             sum += occ[h];
             if (occ[h] > 0) lastOccupied = h;
+        }
+        if (lastOccupied < 0 || sum == 0) return 0;
+        final double mean = sum / (double) (lastOccupied + 1);
+        return mean == 0 ? 0 : peak / mean;
+    }
+
+    /**
+     * Peak divided by mean of the occupancy summed across every region, over
+     * the fleet's active span.
+     *
+     * <p>The region-blind counterpart of {@link #peakToMeanOccupancy()}, and
+     * the one to quote when the comparison spans policies with different
+     * regional concentration. Spreading the same VM-hours over more regions
+     * leaves this figure unchanged, because it asks only whether the fleet as
+     * a whole is level in time, so it isolates temporal crowding from spatial
+     * dispersal instead of confounding the two.
+     *
+     * <p>For a fleet confined to one region the two measures agree up to the
+     * length of the active span, so adding this does not invalidate any figure
+     * already reported for a concentrated policy.
+     */
+    public double fleetPeakToMeanOccupancy() {
+        if (occupancy.isEmpty()) return 0;
+        final int span = limit + 1;
+        long peak = 0;
+        long sum = 0;
+        int lastOccupied = -1;
+        for (int h = 0; h < span; h++) {
+            long now = 0;
+            for (final int[] occ : occupancy.values()) now += occ[h];
+            peak = Math.max(peak, now);
+            sum += now;
+            if (now > 0) lastOccupied = h;
         }
         if (lastOccupied < 0 || sum == 0) return 0;
         final double mean = sum / (double) (lastOccupied + 1);
