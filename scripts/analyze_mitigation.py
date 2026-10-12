@@ -46,6 +46,9 @@ TIE_CONTROL = "space+time+spread(0%)"
 # the axis rather than at each policy's own worst case.
 PEAK_MARGIN = 27
 
+# A peak smaller than this is not the defect under study, whatever its t.
+MATERIAL_PP = 2.0
+
 
 def is_flex(p):
     """Time-flexible policies: the baseline, the mitigations, and WaitAwhile."""
@@ -170,121 +173,183 @@ def violations(df):
     return pd.DataFrame(rows)
 
 
-def q1_removed(viol):
+def q1_removed(viol, df):
+    """Peak height, and why it replaces the maximum violation.
+
+    The maximum of a series is biased upward under a flat null: eight noisy
+    margins produce a positive maximum even when nothing is happening, so a
+    policy that has genuinely flattened the curve still scores several points
+    and looks like a partial fix. Peak height instead contrasts the margins
+    where the baseline peaks against the flanks of the same sweep. It is
+    centred on zero when the curve is flat, so it can be tested against zero,
+    and it answers the question actually being asked: is there still a peak?
+    """
     print("\n" + "=" * 72)
     print("Q1  does the non-monotonicity survive the mitigation?")
     print("=" * 72)
     v = viol.dropna(subset=["violation_pct"])
 
-    # Per policy: the worst violation in each seed's own series, then summarised
-    # across seeds. Taking the max of a mean would hide a defect that moves
-    # margin between seeds.
-    per_seed = v.groupby(["policy", "seed"]).violation_pct.max()
-    s = per_seed.groupby("policy").agg(["mean", "std", "count"])
-    s = s.sort_values("mean", ascending=False)
+    # The plateau is located from the BASELINE, then every policy is read at
+    # the same margins. Locating each policy's own worst margin would compare
+    # different experiments, and for a flat series it would just find noise.
+    base = v[v.policy == BASELINE].groupby("margin").violation_pct.mean()
+    if base.empty:
+        raise SystemExit(f"baseline {BASELINE} missing; cannot locate the plateau")
+    plateau = sorted(base.nlargest(3).index)
+    margins = sorted(v.margin.unique())
+    flanks = [margins[0], margins[-1]]
+    print(f"\n  baseline plateau at margins {[int(m) for m in plateau]}, "
+          f"read against flanks {[int(m) for m in flanks]}")
 
-    print(f"\n  {'policy':<26s} {'worst V per seed':>18s} {'seeds':>7s} {'argmax':>8s}")
-    print("  " + "-" * 62)
-    argmax = v.loc[v.groupby(["policy", "seed"]).violation_pct.idxmax()]
-    for p, r in s.iterrows():
-        am = argmax[argmax.policy == p].margin
-        am_s = f"{am.median():.0f}" if len(am) else "-"
-        if len(am) and am.nunique() > 1:
-            am_s += "*"
-        print(f"  {p:<26s} {r['mean']:>+10.2f} +/- {r['std']:>5.2f} "
-              f"{int(r['count']):>7d} {am_s:>8s}")
-    print("\n  argmax is the median margin of the worst cell; * means it moved")
-    print("  between seeds, which is what a violation inside noise looks like.")
+    rows = []
+    for pol, g in v.groupby("policy"):
+        per = []
+        for _, gs in g.groupby("seed"):
+            p = gs[gs.margin.isin(plateau)].violation_pct.mean()
+            f = gs[gs.margin.isin(flanks)].violation_pct.mean()
+            if pd.notna(p) and pd.notna(f):
+                per.append(p - f)
+        if len(per) < 2:
+            continue
+        s = pd.Series(per)
+        rows.append({"policy": pol, "height": s.mean(), "sd": s.std(),
+                     "se": s.std() / (len(s) ** 0.5), "n": len(s),
+                     "maxV": g.groupby("seed").violation_pct.max().mean()})
+    h = pd.DataFrame(rows).set_index("policy").sort_values("height", ascending=False)
+    h["t"] = h.height / h.se
 
-    base = s.loc[BASELINE, "mean"] if BASELINE in s.index else float("nan")
-    noise = s["std"].median()
-    print(f"\n  baseline worst violation: {base:+.2f}%")
-    print(f"  median across-seed sd:    {noise:.2f} percentage points")
-    ok = s[(s.index.map(is_mitigation)) & (s["mean"] < noise)]
-    if len(ok):
-        print(f"\n  within seed noise of zero: {', '.join(ok.index)}")
-    else:
-        print("\n  no mitigation setting brought the violation inside seed noise.")
-    return s
+    print(f"\n  {'policy':<26} {'height':>8} {'se':>6} {'t':>6} {'n':>3}   "
+          f"{'maxV':>7}   verdict")
+    print("  " + "-" * 76)
+    for p, r in h.iterrows():
+        # Significance alone is not enough. A setting with very little
+        # across-seed spread can clear t=2.5 on a height of well under a
+        # point, which is not the defect under study by any reading.
+        if abs(r.t) >= 2.5 and r.height >= MATERIAL_PP:
+            verdict = "peak present"
+        elif abs(r.t) >= 2.5:
+            verdict = f"resolvable but under {MATERIAL_PP:.0f} pp"
+        else:
+            verdict = "no peak at this power"
+        print(f"  {p:<26} {r.height:>+8.2f} {r.se:>6.2f} {r.t:>6.1f} {int(r.n):>3}   "
+              f"{r.maxV:>+7.2f}   {verdict}")
+
+    print("\n  maxV is shown only for continuity with analyze_resonance.py. It is")
+    print("  biased upward on a flat series, so it must not be read as a residual")
+    print("  defect; height is the statistic to quote.")
+    if BASELINE in h.index:
+        b = h.loc[BASELINE, "height"]
+        print(f"\n  baseline peak height: {b:+.2f} percentage points")
+        gone = h[(h.index.map(is_mitigation))
+                 & ((h.t.abs() < 2.5) | (h.height < MATERIAL_PP))]
+        if len(gone):
+            print(f"  peak not detectable for: {', '.join(gone.index)}")
+        else:
+            print("  every mitigation setting still shows a detectable peak.")
+    return h
 
 
 # ------------------------------------------------------------ 2. what it cost
 
-def q2_cost(df, worst):
+def q2_cost(df, h):
     print("\n" + "=" * 72)
     print("Q2  what did it cost?")
     print("=" * 72)
-    print(f"\n  All columns read at margin {PEAK_MARGIN}, averaged across seeds.")
-    print("  realCI is attributed gCO2 divided by attributed kWh: how dirty the")
-    print("  hours actually chosen were. d_emit is the change in attributed")
-    print("  gCO2 per VM-hour against the baseline, so negative is better.")
+    d = df[df.policy.map(is_flex)]
 
-    d = df[(df.deadline_margin_h == PEAK_MARGIN) & df.policy.map(is_flex)]
-    g = d.groupby("policy").agg(
-        attr=("attributed_gco2_per_vm_hour", "mean"),
-        gco2=(BASIS, "mean"),
-        akwh=("attributed_kwh", "mean"),
-        overrun=("mean_overrun_h", "mean"),
-        viol_rate=("violation_rate", "mean"),
-        defer=("mean_deferral_h", "mean"),
-    )
-    g["realCI"] = g.gco2 / g.akwh
-    if BASELINE not in g.index:
-        raise SystemExit(f"baseline {BASELINE} missing at margin {PEAK_MARGIN}")
-    b = g.loc[BASELINE]
-    g["d_emit"] = 100 * (g.attr / b.attr - 1)
+    print("\n  Attributed gCO2 per VM-hour against the baseline AT THE SAME MARGIN.")
+    print("  Reported per margin rather than pooled, because a congestion price")
+    print("  has nothing to relieve where there is no contention: the sign of the")
+    print("  effect is expected to differ between the crowded and uncrowded ends")
+    print("  of the axis, and a single pooled figure would average that away.")
+    e = d.pivot_table(index="deadline_margin_h", columns="policy",
+                      values="attributed_gco2_per_vm_hour", aggfunc="mean")
+    if BASELINE not in e.columns:
+        raise SystemExit(f"baseline {BASELINE} missing")
+    rel = 100 * (e.div(e[BASELINE], axis=0) - 1)
+    cols = [c for c in rel.columns if c != BASELINE]
+    print(f"\n  {'margin':>7}" + "".join(f"{c.replace('space+time', '') or 'base':>14}"
+                                         for c in cols))
+    print("  " + "-" * (7 + 14 * len(cols)))
+    for m, r in rel.iterrows():
+        print(f"  {int(m):>7}" + "".join(f"{r[c]:>+14.2f}" for c in cols))
 
-    order = [BASELINE] + [p for p in g.index if p != BASELINE]
-    print(f"\n  {'policy':<26s} {'maxV%':>8s} {'realCI':>8s} {'d_emit%':>9s} "
-          f"{'overrun_h':>10s} {'missed%':>8s} {'defer_h':>8s}")
-    print("  " + "-" * 82)
-    for p in order:
-        r = g.loc[p]
-        w = worst.loc[p, "mean"] if p in worst.index else float("nan")
-        print(f"  {p:<26s} {w:>+8.2f} {r.realCI:>8.1f} {r.d_emit:>+9.2f} "
-              f"{r.overrun:>10.2f} {100*r.viol_rate:>8.2f} {r.defer:>8.2f}")
-
-    print("\n  Read d_emit and missed% together with maxV. A mitigation is only")
-    print("  interesting if it cuts maxV without buying that with emissions or")
-    print("  with deadline misses; a row that improves maxV while missed% rises")
-    print("  has moved the problem into the QoS column, not solved it.")
-    return g
+    print("\n  Deadline cost, pooled over margins. A mitigation that improves the")
+    print("  carbon columns while these rise has moved the problem, not solved it.")
+    q = d.groupby("policy").agg(overrun=("mean_overrun_h", "mean"),
+                                missed=("violation_rate", "mean"),
+                                defer=("mean_deferral_h", "mean"))
+    print(f"\n  {'policy':<26} {'overrun_h':>10} {'missed%':>9} {'defer_h':>9}")
+    print("  " + "-" * 56)
+    for p, r in q.iterrows():
+        print(f"  {p:<26} {r.overrun:>10.2f} {100 * r.missed:>9.2f} {r.defer:>9.2f}")
+    return rel
 
 
 # ------------------------------------------------- 3. through which mechanism
 
-def q3_channel(df, worst):
+# Below this regional share a policy has stopped concentrating and has become a
+# spatial load balancer. Its busiest region then holds a thin, spiky remainder,
+# so peak_to_mean_occupancy measured there describes dispersal rather than
+# crowding. The baseline sits near 0.98; a setting below this is reported but
+# excluded from the correlation, which would otherwise be meaningless.
+DEGENERATE_REG_SHARE = 0.85
+
+
+def q3_channel(df, h):
     print("\n" + "=" * 72)
     print("Q3  did it work through temporal crowding, as claimed?")
     print("=" * 72)
     d = df[(df.deadline_margin_h == PEAK_MARGIN) & df.policy.map(is_flex)]
-    g = d.groupby("policy").agg(
-        modal=("modal_start_hour_share", "mean"),
-        entropy=("start_hour_entropy", "mean"),
-        pkmean=("peak_to_mean_occupancy", "mean"),
-        share=("max_region_share", "mean"),
-        hosts=("peak_active_hosts", "mean"),
-    )
-    print(f"\n  {'policy':<26s} {'maxV%':>8s} {'modal':>8s} {'entropy':>8s} "
-          f"{'pk/mean':>8s} {'regShare':>9s} {'hosts':>8s}")
-    print("  " + "-" * 80)
-    order = [BASELINE] + [p for p in g.index if p != BASELINE]
-    for p in order:
-        r = g.loc[p]
-        w = worst.loc[p, "mean"] if p in worst.index else float("nan")
-        print(f"  {p:<26s} {w:>+8.2f} {r.modal:>8.3f} {r.entropy:>8.3f} "
-              f"{r.pkmean:>8.3f} {r.share:>9.3f} {r.hosts:>8.0f}")
+    fleet = "fleet_peak_to_mean_occupancy" in df.columns
+    agg = dict(modal=("modal_start_hour_share", "mean"),
+               entropy=("start_hour_entropy", "mean"),
+               pkmean=("peak_to_mean_occupancy", "mean"),
+               share=("max_region_share", "mean"),
+               hosts=("peak_active_hosts", "mean"))
+    if fleet:
+        agg["fleetpk"] = ("fleet_peak_to_mean_occupancy", "mean")
+    g = d.groupby("policy").agg(**agg)
+    if not fleet:
+        print("\n  NOTE: no fleet_peak_to_mean_occupancy column in these results.")
+        print("  Falling back to the busiest-region measure, which is only valid")
+        print("  while every policy compared stays in one region. Re-run against a")
+        print("  build that reports the fleet-wide figure to remove the caveat.")
+
+    cols = f"{'fleetpk':>9}" if fleet else ""
+    print(f"\n  {'policy':<26} {'height':>8} {'modal':>7} {'entropy':>8} "
+          f"{'pk/mean':>8}{cols} {'regShare':>9} {'hosts':>7}")
+    print("  " + "-" * (76 + len(cols)))
+    for p, r in g.iterrows():
+        hh = h.loc[p, "height"] if p in h.index else float("nan")
+        flag = "  <- dispersed" if r.share < DEGENERATE_REG_SHARE else ""
+        extra = f"{r.fleetpk:>9.3f}" if fleet else ""
+        print(f"  {p:<26} {hh:>+8.2f} {r.modal:>7.3f} {r.entropy:>8.3f} "
+              f"{r.pkmean:>8.3f}{extra} {r.share:>9.3f} {r.hosts:>7.0f}{flag}")
 
     mit = g[g.index.map(is_mitigation)]
-    if len(mit) > 1 and BASELINE in worst.index:
-        w = worst.loc[mit.index, "mean"]
-        for col, label in (("modal", "modal start-hour share"),
-                           ("pkmean", "peak-to-mean occupancy")):
-            c = w.corr(mit[col])
-            print(f"\n  correlation of worst violation with {label}: {c:+.3f}")
-        print("\n  Both should be strongly positive: the settings that crowd least")
-        print("  should be the settings that violate least. A near-zero or negative")
-        print("  correlation means the fix is not acting on crowding and the")
+    keep = mit[mit.share >= DEGENERATE_REG_SHARE]
+    drop = mit[mit.share < DEGENERATE_REG_SHARE]
+    if len(drop):
+        print(f"\n  Excluded from the correlation below, regional share under "
+              f"{DEGENERATE_REG_SHARE}:")
+        for p, r in drop.iterrows():
+            print(f"    {p:<26} regShare {r.share:.3f}")
+        print("  These have stopped concentrating, so their busiest-region crowding")
+        print("  figure measures dispersal. They are a boundary on the parameter,")
+        print("  not a setting to recommend: read their emissions row in Q2.")
+
+    if len(keep) > 1 and len(h):
+        w = h.loc[keep.index, "height"]
+        pairs = [("modal", "modal start-hour share"), ("pkmean", "peak-to-mean occupancy")]
+        if fleet:
+            pairs.append(("fleetpk", "fleet-wide peak-to-mean"))
+        print(f"\n  Correlation of peak height with, over {len(keep)} concentrating settings:")
+        for col, label in pairs:
+            print(f"    {label:<30} {w.corr(keep[col]):+.3f}")
+        print("\n  These should be strongly positive: the settings that crowd least")
+        print("  should be the settings with the smallest peak. A near-zero or")
+        print("  negative value means the fix is not acting on crowding and the")
         print("  mechanism section needs a different explanation.")
 
 
@@ -293,14 +358,16 @@ def main():
     df = load(target)
     controls(df)
     viol = violations(df)
-    worst = q1_removed(viol)
-    q2_cost(df, worst)
-    q3_channel(df, worst)
+    h = q1_removed(viol, df)
+    q2_cost(df, h)
+    q3_channel(df, h)
     print("\n" + "=" * 72)
-    print("If a setting clears Q1 inside noise, is non-positive on d_emit in Q2,")
-    print("and moves modal and pk/mean in Q3, that is the result the paper needs:")
-    print("the defect is removable online, and the mechanism is confirmed by the")
-    print("fact that addressing crowding is what removes it.")
+    print("What the paper needs from this run is a setting that shows no peak in")
+    print("Q1, does not pay for that with emissions or deadlines at the crowded")
+    print("margins in Q2, keeps its regional share in Q3, and sits on the right")
+    print("side of the crowding correlation. A setting that clears Q1 only after")
+    print("its regional share has collapsed has removed the defect by ceasing to")
+    print("be carbon-aware, which round-robin also achieves and nobody wants.")
 
 
 if __name__ == "__main__":

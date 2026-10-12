@@ -273,6 +273,7 @@ public final class Simulator {
             ledger.modalStartHourShare(),
             ledger.startHourEntropy(),
             ledger.peakToMeanOccupancy(),
+            ledger.fleetPeakToMeanOccupancy(),
             ledger.peakConcurrency(),
             hostsPerRegion,
             meter.peakActiveHosts(),

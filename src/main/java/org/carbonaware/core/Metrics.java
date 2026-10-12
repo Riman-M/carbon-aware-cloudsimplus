@@ -33,6 +33,10 @@ public record Metrics(
     double modalStartHourShare,
     double startHourEntropy,
     double peakToMeanOccupancy,
+    // Busiest-region crowding above, fleet-wide crowding here. They agree
+    // while the fleet sits in one region and diverge once a policy disperses,
+    // at which point only the fleet-wide figure still measures crowding.
+    double fleetPeakToMeanOccupancy,
     int peakConcurrency,
     int hostsPerRegion,
     long peakActiveHosts,
@@ -70,6 +74,7 @@ public record Metrics(
             "deadline_violations", "violation_rate", "mean_overrun_h",
             "mean_deferral_h", "max_region_share",
             "modal_start_hour_share", "start_hour_entropy", "peak_to_mean_occupancy",
+            "fleet_peak_to_mean_occupancy",
             "peak_concurrency",
             "hosts_per_region", "peak_active_hosts", "plan_ms",
             "misplaced_vms", "uncreated_vms", "cloudlets_finished", "placement_valid");
@@ -78,7 +83,7 @@ public record Metrics(
     public String toCsvRow() {
         return String.format(
             "%s,%s,%s,%d,%d,%d,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%d,%.2f,%.6f,%.6f,%.6f,"
-            + "%d,%.4f,%.3f,%.3f,%.4f,%.4f,%.4f,%.4f,%d,%d,%d,%.2f,%d,%d,%d,%b",
+            + "%d,%.4f,%.3f,%.3f,%.4f,%.4f,%.4f,%.4f,%.4f,%d,%d,%d,%.2f,%d,%d,%d,%b",
             policy, foresight, regionSet, perRegionCap, totalCapacity, deadlineMarginH,
             totalGrams, dynamicGrams, attributedGrams,
             totalKwh, dynamicKwh, attributedKwh,
@@ -86,7 +91,8 @@ public record Metrics(
             gramsPerVmHour(), dynamicGramsPerVmHour(), attributedGramsPerVmHour(),
             deadlineViolations, violationRate(), meanOverrunH,
             meanDeferralH, maxRegionShare,
-            modalStartHourShare, startHourEntropy, peakToMeanOccupancy, peakConcurrency,
+            modalStartHourShare, startHourEntropy, peakToMeanOccupancy,
+            fleetPeakToMeanOccupancy, peakConcurrency,
             hostsPerRegion, peakActiveHosts, planMillis,
             misplacedVms, uncreatedVms, cloudletsFinished, placementValid());
     }
