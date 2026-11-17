@@ -97,6 +97,22 @@ public final class ExperimentRunner {
         final String startHour = meta.getProperty("start_hour", "0");
         final String traceRegionSet = meta.getProperty("region_set", "unknown");
 
+        // A region set named in the trace metadata but absent from REGION_SETS
+        // (the generated subsets of scripts/make_subsets.py) is registered from
+        // the metadata's own region list. Named sets are never overridden, so
+        // the us and eu runs behave exactly as before.
+        final String metaRegions = meta.getProperty("regions", "");
+        if (!metaRegions.isBlank() && !REGION_SETS.containsKey(traceRegionSet)) {
+            REGION_SETS.put(traceRegionSet, List.of(metaRegions.split("\\|")));
+        }
+
+        // -Dsweep.policies=round-robin,space restricts the planners run. The
+        // region-set experiment needs only the spatial policy and its baseline,
+        // and space+time dominates the run time.
+        final String policyFilter = System.getProperty("sweep.policies", "");
+        final Set<String> wantedPolicies = policyFilter.isBlank() ? Set.of()
+            : new LinkedHashSet<>(Arrays.asList(policyFilter.split(",")));
+
         final String only0 = System.getProperty("sweep.regionSets", "");
 
         // -Dsweep.homeRegion=all runs WaitAwhile once per region in the set.
@@ -154,7 +170,13 @@ public final class ExperimentRunner {
             // Deliberately the full default sweep, not the (possibly reduced)
             // selection: a smoke run must provision the same fleet as the full run
             // or its emissions are not comparable with it.
-            final int maxTotal = Arrays.stream(DEFAULT_TOTAL_CAPACITY).max().orElse(0);
+            //
+            // Note: DEFAULT_TOTAL_CAPACITY tops out at 200, so the published
+            // sweeps (caps up to 350) were provisioned for 200 slots, not for
+            // the largest cap run. -Dsweep.fleetTotal overrides the sizing basis
+            // so the consequence of that can be measured directly.
+            final int maxTotal = Integer.getInteger("sweep.fleetTotal",
+                Arrays.stream(DEFAULT_TOTAL_CAPACITY).max().orElse(0));
             final int fleetCapPerRegion = Math.max(1, maxTotal / regions.size());
 
             for (final int margin : MARGINS) {
@@ -172,7 +194,7 @@ public final class ExperimentRunner {
                     // WaitAwhile is pinned to a home region, so its result is a
                     // statement about that region as much as about deferral. With
                     // home fixed to regions.get(0) it drew SE for the eu set and
-                    // BPAT for us -- in both cases the cleanest grid available,
+                    // BPAT for us, in both cases the cleanest grid available,
                     // which handed the time-shifting policy the optimum for free
                     // and made every space-vs-time comparison uninterpretable.
                     // Sweeping the home region reports the whole distribution
@@ -192,6 +214,10 @@ public final class ExperimentRunner {
 
                     for (final var f : factories) {
                         final Planner planner = f.apply(ci);
+                        // WaitAwhile is matched on its family name, so that
+                        // "time" selects every origin when the home sweep is on.
+                        final String family = planner.name().startsWith("time@") ? "time" : planner.name();
+                        if (!wantedPolicies.isEmpty() && !wantedPolicies.contains(family)) continue;
                         // Perfect foresight throughout: the planning trace is the
                         // ground truth, so capacity and deadline effects are not
                         // confounded with prediction quality.
@@ -235,8 +261,8 @@ public final class ExperimentRunner {
             System.out.println("placement check passed: every VM ran in its planned region and completed");
         }
 
-        // The total basis is policy-invariant by construction -- the same fleet is
-        // powered in the same regions regardless of placement -- so if the spread
+        // The total basis is policy-invariant by construction (the same fleet is
+        // powered in the same regions regardless of placement), so if the spread
         // across policies is near zero, that is expected rather than a bug, and
         // the attributed basis is the one carrying the signal.
         reportSpread(results, "total",      Metrics::gramsPerVmHour);

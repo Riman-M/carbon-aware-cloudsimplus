@@ -54,7 +54,7 @@ public final class Simulator {
      * <p>CloudSim Plus's default is -1, meaning a VM is torn down the instant it
      * goes idle. A VM created at its submission delay is momentarily idle before
      * the broker dispatches its bound cloudlet, which can destroy it before it
-     * ever runs -- the run then reports near-zero dynamic power with no error.
+     * ever runs, and the run then reports near-zero dynamic power with no error.
      * A small positive delay closes that window while still releasing capacity
      * promptly once work finishes.
      */
@@ -63,8 +63,9 @@ public final class Simulator {
     /**
      * Hosts provisioned per region.
      *
-     * <p><b>Changed:</b> the sizing basis is now fixed across the whole sweep --
-     * it is driven by the <em>largest</em> capacity cap the experiment will run,
+     * <p><b>Changed:</b> the sizing basis is now fixed across the whole sweep.
+     * It is driven by the capacity passed in by ExperimentRunner (the largest
+     * value of DEFAULT_TOTAL_CAPACITY unless -Dsweep.fleetTotal overrides it),
      * not by the cap of the current cell. Sizing per cell coupled fleet size to
      * the capacity axis, so total emissions rose with the cap simply because more
      * hardware had been provisioned (918 to 3826 kgCO2 for the eu set on identical
@@ -75,7 +76,7 @@ public final class Simulator {
      *
      * <p>Sizing is driven by the largest VM in the workload,
      * not the mean. The cap bounds the <em>number</em> of concurrent VMs, not
-     * their size, and CloudSim Plus places per host rather than from a pool -- a
+     * their size, and CloudSim Plus places per host rather than from a pool, so a
      * 128 GB VM needs one host with 128 GB free. With this trace the mean VM is
      * 6.3 vCPU / 29.7 GB but the largest is 16 vCPU / 128 GB, so mean-based
      * sizing under-provisioned by roughly 3x and creation failed. When the mapped
@@ -129,7 +130,7 @@ public final class Simulator {
 
         final Map<String, Datacenter> dcByRegion = new LinkedHashMap<>();
         final Map<Datacenter, String> regionOf = new LinkedHashMap<>();
-        // Identical in every cell of the sweep -- see hostsFor().
+        // Identical in every cell of the sweep; see hostsFor().
         final int hostsPerRegion = hostsFor(fleetSizingCapPerRegion, maxPes, maxRam);
         for (final String region : eligibleRegions) {
             final Datacenter dc = new DatacenterSimple(sim, createHosts(hostsPerRegion));
@@ -153,7 +154,7 @@ public final class Simulator {
         // DatacenterBrokerAbstract invokes the datacenter mapper once per batch of
         // waiting VMs and then asks that one datacenter to create all of them, so
         // the mapper's Vm argument is merely the first VM of the batch. With one
-        // broker every VM landed in the same datacenter regardless of the plan --
+        // broker every VM landed in the same datacenter regardless of the plan:
         // regional concentration varied from 10% to 100% across policies while
         // emissions stayed identical, because no VM ever moved. Giving each region
         // its own broker, each pinned to its own datacenter, makes misplacement
@@ -163,13 +164,16 @@ public final class Simulator {
         // Keyed by VM id, not by Vm.
         //
         // CloudSim Plus derives Vm.equals/hashCode from the id *and the broker*,
-        // and the broker is assigned during submitVmList -- after these entries are
+        // and the broker is assigned during submitVmList, after these entries are
         // inserted. A Vm key therefore changes its hash while sitting in the map,
         // every post-simulation lookup misses, and each VM is scored as misplaced
         // even when it ran exactly where planned. Request ids are globally unique,
         // so they are a stable key.
         final Map<Long, Datacenter> targetDc = new HashMap<>();
         final Map<Long, Datacenter> actualDc = new HashMap<>();
+        // Planned finish time per request id, in simulation seconds, for the
+        // schedule-fidelity check after the run.
+        final Map<Long, Double> plannedFinishSec = new HashMap<>();
 
         for (final String region : eligibleRegions) {
             final Datacenter dc = dcByRegion.get(region);
@@ -199,6 +203,7 @@ public final class Simulator {
             vm.setSubmissionDelay(pl.startHour() * 3600.0);
 
             targetDc.put(vm.getId(), dcByRegion.get(pl.region()));
+            plannedFinishSec.put(req.id(), (pl.startHour() + req.durationH()) * 3600.0);
             vms.add(vm);
             vmsByRegion.get(pl.region()).add(vm);
 
@@ -226,7 +231,7 @@ public final class Simulator {
         // addOnVmsCreatedListener fires only once the broker has created *all* its
         // waiting VMs. Where capacity binds, some VMs are deferred past the
         // measurement window and never created, the condition is never met, and
-        // the listener never fires -- so the cells that matter most reported every
+        // the listener never fires, so the cells that matter most reported every
         // VM as uncreated while their cloudlets were visibly completing. The
         // created list is cumulative and survives VM destruction, and since each
         // broker is pinned to exactly one datacenter, membership in that list is
@@ -250,6 +255,47 @@ public final class Simulator {
         final int finished = brokerByRegion.values().stream()
             .mapToInt(b -> b.getCloudletFinishedList().size()).sum();
 
+        // Schedule fidelity: did each VM run *when* its planner said, not only
+        // where?
+        //
+        // The placement check above confirms region and completion. It does not
+        // confirm timing. A VM that cannot be fitted onto any host at its planned
+        // hour is held by the broker and created later, so it still runs in the
+        // planned region and may still finish inside the window, while the
+        // emissions it is charged are those of hours the planner never chose.
+        //
+        // Completion lag is the actual finish time minus the planned finish
+        // (planned start plus duration). It is derived from getFinishTime(),
+        // which is stable across CloudSim Plus releases, rather than from a
+        // start-time accessor whose name has changed between versions. A late
+        // start and a slowed execution both appear as positive lag; either one
+        // means the executed schedule is not the planned one. Finish times are
+        // quantised by the 300 s scheduling interval, so lag below one hour is
+        // treated as timing noise.
+        int lateVms = 0;
+        double maxLagH = 0;
+        double sumLagH = 0;
+        final Set<Long> finishedIds = new HashSet<>();
+        for (final DatacenterBroker b : brokerByRegion.values()) {
+            for (final Cloudlet c : b.getCloudletFinishedList()) {
+                finishedIds.add(c.getId());
+                final double lagH = (c.getFinishTime() - plannedFinishSec.get(c.getId())) / 3600.0;
+                sumLagH += Math.max(0, lagH);
+                maxLagH = Math.max(maxLagH, lagH);
+                if (lagH > 1.0) lateVms++;
+            }
+        }
+        // For cloudlets still running at the end of the window, the latest
+        // planned finish among them. A value inside the window means the
+        // planner scheduled the work to complete and execution did not keep to
+        // that schedule.
+        double unfinishedPlannedEndH = -1;
+        for (final var e : plannedFinishSec.entrySet()) {
+            if (!finishedIds.contains(e.getKey())) {
+                unfinishedPlannedEndH = Math.max(unfinishedPlannedEndH, e.getValue() / 3600.0);
+            }
+        }
+
         return new Metrics(
             planner.name(), regionSetName,
             capByRegion.values().stream().mapToInt(Integer::intValue).max().orElse(0),
@@ -268,7 +314,11 @@ public final class Simulator {
             planMillis,
             misplaced,
             notCreated,
-            finished);
+            finished,
+            lateVms,
+            maxLagH,
+            finished == 0 ? 0 : sumLagH / finished,
+            unfinishedPlannedEndH);
     }
 
     private static List<Host> createHosts(final int count) {
@@ -279,7 +329,7 @@ public final class Simulator {
             final Host host = new HostSimple(HOST_RAM_MB, HOST_BW_MBPS, HOST_STORAGE, pes);
             // Set so the simulator's own bookkeeping is well-formed. Emissions
             // are computed by CarbonMeter from the measured SpecPower curve, not
-            // from this linear approximation -- see SpecPower for why.
+            // from this linear approximation; see SpecPower for why.
             host.setPowerModel(new PowerModelHostSimple(
                 SpecPower.maxWatts(), SpecPower.idleWatts()));
             hosts.add(host);

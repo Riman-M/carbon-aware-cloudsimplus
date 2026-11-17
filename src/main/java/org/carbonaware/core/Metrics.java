@@ -32,7 +32,15 @@ public record Metrics(
     double planMillis,
     int misplacedVms,
     int uncreatedVms,
-    int cloudletsFinished
+    int cloudletsFinished,
+    // Schedule fidelity, see Simulator: VMs finishing more than one hour after
+    // their planned finish, the largest such lag, the mean lag over finished
+    // VMs, and the latest planned finish among VMs that did not complete
+    // (-1 when every VM completed).
+    int lateVms,
+    double maxLagH,
+    double meanLagH,
+    double unfinishedPlannedEndH
 ) {
     public double gramsPerVmHour()           { return vmHours == 0 ? 0 : totalGrams / vmHours; }
     public double dynamicGramsPerVmHour()    { return vmHours == 0 ? 0 : dynamicGrams / vmHours; }
@@ -53,6 +61,15 @@ public record Metrics(
         return misplacedVms == 0 && uncreatedVms == 0 && cloudletsFinished == requests;
     }
 
+    /**
+     * True when no VM finished more than one hour later than its plan. A row can
+     * pass {@link #placementValid()} and fail this: the VM ran in the right
+     * region, but not at the hours whose carbon intensity the planner chose.
+     */
+    public boolean scheduleFaithful() {
+        return lateVms == 0 && cloudletsFinished == requests;
+    }
+
     public static String csvHeader() {
         return String.join(",",
             "policy", "region_set", "per_region_cap", "total_capacity", "deadline_margin_h",
@@ -63,13 +80,15 @@ public record Metrics(
             "deadline_violations", "violation_rate", "mean_overrun_h",
             "mean_deferral_h", "max_region_share", "peak_concurrency",
             "hosts_per_region", "peak_active_hosts", "plan_ms",
-            "misplaced_vms", "uncreated_vms", "cloudlets_finished", "placement_valid");
+            "misplaced_vms", "uncreated_vms", "cloudlets_finished", "placement_valid",
+            "late_vms", "max_lag_h", "mean_lag_h", "unfinished_planned_end_h",
+            "schedule_faithful");
     }
 
     public String toCsvRow() {
         return String.format(
             "%s,%s,%d,%d,%d,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%d,%.2f,%.6f,%.6f,%.6f,"
-            + "%d,%.4f,%.3f,%.3f,%.4f,%d,%d,%d,%.2f,%d,%d,%d,%b",
+            + "%d,%.4f,%.3f,%.3f,%.4f,%d,%d,%d,%.2f,%d,%d,%d,%b,%d,%.3f,%.4f,%.1f,%b",
             policy, regionSet, perRegionCap, totalCapacity, deadlineMarginH,
             totalGrams, dynamicGrams, attributedGrams,
             totalKwh, dynamicKwh, attributedKwh,
@@ -78,6 +97,7 @@ public record Metrics(
             deadlineViolations, violationRate(), meanOverrunH,
             meanDeferralH, maxRegionShare, peakConcurrency,
             hostsPerRegion, peakActiveHosts, planMillis,
-            misplacedVms, uncreatedVms, cloudletsFinished, placementValid());
+            misplacedVms, uncreatedVms, cloudletsFinished, placementValid(),
+            lateVms, maxLagH, meanLagH, unfinishedPlannedEndH, scheduleFaithful());
     }
 }
