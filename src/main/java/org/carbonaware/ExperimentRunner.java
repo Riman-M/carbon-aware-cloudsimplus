@@ -133,6 +133,7 @@ public final class ExperimentRunner {
             ci.isMarginal() ? "marginal" : "average");
         System.out.printf("demand=%.0f VM-hours  mean concurrency=%.1f%n",
             demandVmHours, demandVmHours / ci.horizonHours());
+        System.out.printf("power model=%s%n", org.carbonaware.core.SpecPower.modelName());
 
         final List<Metrics> results = new ArrayList<>();
 

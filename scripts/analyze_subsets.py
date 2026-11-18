@@ -22,7 +22,7 @@ data/subsets/subsets.csv, and reports:
 Only numpy, scipy and pandas are required.
 
 Usage:
-    python scripts/analyze_subsets.py [results/subsets] [data/subsets]
+    python scripts/analyze_subsets.py [results/subsets] [data/subsets] [attr|dyn]
 """
 import glob
 import os
@@ -34,6 +34,13 @@ import numpy as np
 import pandas as pd
 from scipy import stats
 
+
+# Accounting basis for every reduction reported: "attr" (attributed, full draw
+# of active hosts) or "dyn" (draw above idle only). The fidelity diagnostic
+# showed the attributed basis depends on how many hosts are provisioned,
+# through the allocator's spreading of VMs, while the dynamic basis does not,
+# so both should be read.
+BASIS = "attr"
 
 # ---------------------------------------------------------------- loading
 
@@ -126,6 +133,7 @@ def reductions(core, desc):
         joined = p.join(base[["attributed_gco2", "dynamic_gco2"]], rsuffix="_rr", how="inner")
         joined["red_attr"] = 100 * (1 - joined.attributed_gco2 / joined.attributed_gco2_rr)
         joined["red_dyn"] = 100 * (1 - joined.dynamic_gco2 / joined.dynamic_gco2_rr)
+        joined["red"] = joined["red_" + BASIS]
         joined["policy"] = pol
         rows.append(joined.reset_index())
     r = pd.concat(rows, ignore_index=True)
@@ -138,12 +146,12 @@ def report_by_capacity(r):
     print("1. Reduction against round-robin, mean over seeds, by capacity")
     print("=" * 78)
     for pol, g in r.groupby("policy"):
-        per = g.groupby(["total_capacity", "set"]).red_attr.mean().unstack(0)
-        print(f"\n  {pol}: attributed reduction (%), min / median / max across subsets")
+        per = g.groupby(["total_capacity", "set"]).red.mean().unstack(0)
+        print(f"\n  {pol}: {BASIS} reduction (%), min / median / max across subsets")
         for cap in per.columns:
             col = per[cap]
             print(f"    cap {cap:>4d}  {col.min():6.1f}  {col.median():6.1f}  {col.max():6.1f}"
-                  f"   (sd across seeds, median {g[g.total_capacity == cap].groupby('set').red_attr.std().median():.1f})")
+                  f"   (sd across seeds, median {g[g.total_capacity == cap].groupby('set').red.std().median():.1f})")
 
 
 def report_simple(r):
@@ -151,7 +159,7 @@ def report_simple(r):
     print("2. Which composition descriptor predicts the reduction? (space, per capacity)")
     print("=" * 78)
     s = r[r.policy == "space"].groupby(["total_capacity", "set"]).agg(
-        red=("red_attr", "mean"), dominance=("dominance", "first"),
+        red=("red", "mean"), dominance=("dominance", "first"),
         spread=("spread", "first"), headroom=("headroom", "first")).reset_index()
     s["log_dominance"] = np.log(s.dominance)
     s["log_spread"] = np.log(s.spread)
@@ -199,14 +207,14 @@ def report_concentration(r):
     names.append("policy_space+time")
     X.append(d.headroom.values)
     names.append("headroom")
-    tab, r2, n = ols(d.red_attr.values, np.column_stack(X), names)
+    tab, r2, n = ols(d.red.values, np.column_stack(X), names)
     print(f"  R2 = {r2:.3f}, n = {n}")
     shown = tab.copy()
     shown["p"] = shown.p.map(fmt_p)
     print(shown.to_string(float_format=lambda v: f"{v:9.3f}"))
 
     # The bivariate figure the manuscript reported, for comparison.
-    rr = stats.pearsonr(d.max_region_share, d.red_attr)
+    rr = stats.pearsonr(d.max_region_share, d.red)
     print(f"\n  bivariate corr(share, reduction) = {rr.statistic:+.3f}, n = {len(d)}")
     print("  Note: share correlates with emissions negatively and with reduction positively.")
 
@@ -246,8 +254,13 @@ def report_origin(origin, mean_ci, diurnal):
 
 
 def main():
+    global BASIS
     results_dir = Path(sys.argv[1] if len(sys.argv) > 1 else "results/subsets")
     subset_dir = Path(sys.argv[2] if len(sys.argv) > 2 else "data/subsets")
+    BASIS = sys.argv[3] if len(sys.argv) > 3 else "attr"
+    if BASIS not in ("attr", "dyn"):
+        raise SystemExit("basis must be attr or dyn")
+    print(f"accounting basis: {BASIS}")
     desc = pd.read_csv(subset_dir / "subsets.csv")
 
     core = load(results_dir, "core")
@@ -262,7 +275,7 @@ def main():
     report_joint(s)
     report_concentration(r)
 
-    out = results_dir / "summary"
+    out = results_dir / f"summary_{BASIS}"
     out.mkdir(exist_ok=True)
     r.to_csv(out / "reductions_by_cell.csv", index=False)
     s.to_csv(out / "space_reduction_by_set.csv", index=False)
