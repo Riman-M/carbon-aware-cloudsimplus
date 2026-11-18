@@ -26,13 +26,19 @@ function Check($step) {
     if ($LASTEXITCODE -ne 0) { throw "FAILED at: $step" }
 }
 
-if (-not (Test-Path "data\subsets\subsets.csv")) {
+# The per-subset trace folders are generated, not versioned, so test for
+# them rather than for subsets.csv, which is versioned and may be present
+# without them.
+$subsets = @(Get-ChildItem -Directory "data\subsets" -Filter "sub*" -ErrorAction SilentlyContinue)
+if ($subsets.Count -eq 0) {
     python scripts\make_subsets.py --carbon-src $CC
     Check "make_subsets.py"
+    $subsets = @(Get-ChildItem -Directory "data\subsets" -Filter "sub*")
 }
+if ($subsets.Count -eq 0) { throw "no subset folders under data\subsets; make_subsets.py produced nothing" }
+$subsets = $subsets | Sort-Object Name
+Write-Host "subsets to run: $($subsets.Count)"
 New-Item -ItemType Directory -Force -Path "results\subsets" | Out-Null
-
-$subsets = Get-ChildItem -Directory "data\subsets" -Filter "sub*" | Sort-Object Name
 
 foreach ($seed in 1, 2, 3) {
     Write-Host "`n############ seed $seed : sampling workload ############"

@@ -30,9 +30,15 @@ set CC=data\carboncast
 set AZURE=--vm-src data\AzureVMTraces\vmtable_with_header.csv --min-duration-h 2
 set BASE=--hours 720 --requests 1000 --deadline-margin 48
 
-if not exist data\subsets\subsets.csv (
+REM The per-subset trace folders are generated, not versioned, so test for
+REM one of them rather than for subsets.csv, which may be present without them.
+if not exist data\subsets\sub01\carbon_intensity.csv (
   python scripts\make_subsets.py --carbon-src %CC%
   if errorlevel 1 goto :failed
+)
+if not exist data\subsets\sub01\carbon_intensity.csv (
+  echo no subset folders under data\subsets; make_subsets.py produced nothing
+  goto :failed
 )
 if not exist results\subsets mkdir results\subsets
 
