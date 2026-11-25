@@ -429,10 +429,12 @@ def main():
             al = section_a(arms["us_linear_full"], basis, quiet=True)
             dl_u = reduction(arms["us_linear_full"], basis)
             ds_u = reduction(arms["us_full"], basis)
-            for (c, u, m, lo, hi, p, n), (_, _, m2, lo2, hi2, p2, n2) in zip(a[1], al[1]):
-                print(f"  margin effect cap {c:>3}: measured {m:6.1f} [{lo:6.1f}, {hi:6.1f}]   "
+            # Loop names here must not reuse a, b, c or d, which hold the
+            # section results used below.
+            for (cap, u, m, lo, hi, p, n), (_, _, m2, lo2, hi2, p2, n2) in zip(a[1], al[1]):
+                print(f"  margin effect cap {cap:>3}: measured {m:6.1f} [{lo:6.1f}, {hi:6.1f}]   "
                       f"linear {m2:6.1f} [{lo2:6.1f}, {hi2:6.1f}]")
-                headline(f"linear_margin_effect_cap{c}", basis, m2, lo2, hi2, p2, n2)
+                headline(f"linear_margin_effect_cap{cap}", basis, m2, lo2, hi2, p2, n2)
             for cap in sorted(ds_u.total_capacity.unique()):
                 s1 = mean_ci(ds_u[ds_u.total_capacity == cap].red)
                 s2 = mean_ci(dl_u[dl_u.total_capacity == cap].red)
@@ -441,7 +443,8 @@ def main():
                 headline(f"linear_us_space_reduction_cap{cap}", basis, s2[0], s2[1], s2[2], np.nan, s2[3])
             if arms["us_linear_home"] is not None:
                 cl = section_c(arms["us_linear_home"], basis, quiet=True)
-                for (cap, m, *_, ratio, s, bn, wn), (_, _, *__, ratio2, s2_, bn2, wn2) in zip(c, cl):
+                for row, row_lin in zip(c, cl):
+                    cap, m, ratio, ratio2 = row[0], row[1], row[5], row_lin[5]
                     print(f"  origin ratio cap {cap:>3} m {m:>2}: measured {ratio:.2f}   linear {ratio2:.2f}")
                     headline(f"linear_origin_ratio_cap{cap}_m{m}", basis, ratio2)
 
