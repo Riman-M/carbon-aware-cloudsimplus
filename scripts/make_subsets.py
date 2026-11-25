@@ -79,6 +79,8 @@ def main():
     ap.add_argument("--bins", type=int, default=4,
                     help="strata per axis on log dominance and log spread")
     ap.add_argument("--seed", type=int, default=2026)
+    ap.add_argument("--prefix", default="sub",
+                    help="set name prefix; the hold-out sets use h4- and h6-")
     args = ap.parse_args()
 
     regions = sorted(pt.CARBONCAST_REGIONS)
@@ -119,7 +121,7 @@ def main():
     args.out.mkdir(parents=True, exist_ok=True)
     index_rows = []
     for i, (k, c) in enumerate(chosen, start=1):
-        name = f"sub{i:02d}"
+        name = f"{args.prefix}{i:02d}"
         # Region order inside a set fixes WaitAwhile's default origin and the
         # round-robin rotation. Sorting by mean makes that order a stated
         # property of the set rather than an accident of enumeration.

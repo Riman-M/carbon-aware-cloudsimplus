@@ -1,0 +1,5 @@
+# Files whose exact content is checked by hash or by comparison. Git must
+# store and check them out byte for byte, without line-ending conversion.
+predictions/* -text
+data/subsets/subsets.csv -text
+data/holdout-*/subsets.csv -text

@@ -228,8 +228,9 @@ def report_origin(origin, mean_ci, diurnal):
     t["home_ci"] = t.home.map(mean_ci)
     t["home_diurnal"] = t.home.map(diurnal)
     # Coefficients on the across-seed mean per origin: one estimator throughout.
+    col = "dynamic_gco2" if BASIS == "dyn" else "attributed_gco2"
     g = t.groupby(["set", "total_capacity", "home"]).agg(
-        attr=("attributed_gco2", "mean"), share=("max_region_share", "mean"),
+        attr=(col, "mean"), share=("max_region_share", "mean"),
         ci=("home_ci", "first"), di=("home_diurnal", "first")).reset_index()
     rows = []
     for (s, cap), gg in g.groupby(["set", "total_capacity"]):
