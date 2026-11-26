@@ -5,7 +5,7 @@ Generate input traces for the carbon-aware CloudSim Plus harness.
 Two modes:
 
   synthetic  Produces plausible carbon-intensity and VM-request traces so the
-             harness runs immediately. NOT for publication -- results from
+             harness runs immediately. NOT for publication: results from
              synthetic CI are not evidence about real grids.
 
   real       Converts CarbonCast per-region lifecycle-emission CSVs into the
@@ -40,7 +40,7 @@ from pathlib import Path
 #
 # Cross-region spread is 17.8x (SE 38 -> PL 674), which is what space-shifting
 # exploits. Within-region daily swing ranges from 10.6% (SE) to 63.6% (CISO),
-# which is what time-shifting exploits -- and unlike the synthetic generator,
+# which is what time-shifting exploits. Unlike the synthetic generator,
 # where every region got a similar amplitude, that variation is real and large
 # enough to be an experimental axis in its own right.
 CARBONCAST_REGIONS = {
@@ -142,7 +142,7 @@ def load_carboncast(src, regions, hours, start_hour):
     Timestamps are NOT in a single format across regions: some files use
     %m/%d/%Y %H:%M:%S, some ISO 8601, and DE carries an explicit +00:00 offset.
     They are parsed permissively and normalised to UTC, then checked for
-    completeness rather than trusted -- a silently short region would shift every
+    completeness rather than trusted, since a silently short region would shift every
     later hour and corrupt the cross-region alignment the whole experiment rests
     on.
     """
@@ -213,9 +213,14 @@ def load_carboncast(src, regions, hours, start_hour):
 # Top-bucket substitutes for the Azure V2 trace. The dataset encodes its
 # highest core and memory buckets as ">24" and ">64"; these are the values used
 # in the dataset's own published analysis. Both are lower bounds on the true
-# size of the machines in those buckets.
+# size of the machines in those buckets. --top-core-bucket and
+# --top-memory-bucket override them for the sensitivity test; they cannot
+# exceed the simulated host (32 cores, 256 GB), since a larger VM would never
+# be placed.
 TOP_CORE_BUCKET = 30
 TOP_MEMORY_BUCKET = 70
+HOST_CORES = 32
+HOST_MEMORY_GB = 256
 
 
 def parse_bucket(raw, top):
@@ -252,7 +257,7 @@ def load_azure(path, count, hours, margin, seed, min_duration_h, category):
     Reservoir sampling, not head -n: the file is not shuffled, so taking the
     first N rows would sample whatever ordering Azure wrote it in.
 
-    Right-censored VMs -- those still alive at the end of the trace -- are
+    Right-censored VMs (those still alive at the end of the trace) are
     dropped, because their duration is unknown and treating the truncation point
     as a completion would silently shorten exactly the long-running VMs that
     carbon-aware scheduling is supposed to target.
@@ -378,6 +383,9 @@ def write_csv(path, header, rows):
 
 
 def main():
+    # The bucket substitutes are module constants read by load_azure; the
+    # command line may replace them for the sensitivity test.
+    global TOP_CORE_BUCKET, TOP_MEMORY_BUCKET
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--mode", choices=["synthetic", "real"], default="synthetic")
@@ -408,7 +416,18 @@ def main():
                     help="restrict to one Azure workload class")
     ap.add_argument("--region-set", choices=sorted(REAL_REGION_SETS),
                     help="named CarbonCast region set (overrides --regions)")
+    ap.add_argument("--top-core-bucket", type=float, default=TOP_CORE_BUCKET,
+                    help="cores assigned to the Azure '>24' bucket (default 30)")
+    ap.add_argument("--top-memory-bucket", type=float, default=TOP_MEMORY_BUCKET,
+                    help="GB assigned to the Azure '>64' bucket (default 70)")
     args = ap.parse_args()
+
+    if not 24 < args.top_core_bucket <= HOST_CORES:
+        raise SystemExit(f"--top-core-bucket must lie in (24, {HOST_CORES}]: "
+                         "above 24 by the bucket's definition, at most one host")
+    if not 64 < args.top_memory_bucket <= HOST_MEMORY_GB:
+        raise SystemExit(f"--top-memory-bucket must lie in (64, {HOST_MEMORY_GB}]")
+    TOP_CORE_BUCKET, TOP_MEMORY_BUCKET = args.top_core_bucket, args.top_memory_bucket
 
     if args.region_set:
         args.regions = REAL_REGION_SETS[args.region_set]
@@ -430,10 +449,11 @@ def main():
     write_csv(args.out / "carbon_intensity.csv",
               ["hour", "region", "ci_gco2_per_kwh"], ci_rows)
 
-    # VM requests remain synthetic even in --mode real: the Azure Resource
-    # Central conversion is a separate step. Any run mixing real CI with these
-    # requests must say so -- the workload shape (6-24h uniform durations, sizes
-    # drawn independently of arrival time) is an assumption, not an observation.
+    # VM requests come from the Azure trace when --vm-src is given and are
+    # synthetic otherwise. A run mixing real carbon intensity with synthetic
+    # requests says so, since the synthetic workload shape (6-24 h uniform
+    # durations, sizes drawn independently of arrival time) is an assumption,
+    # not an observation.
     if args.vm_src:
         req_rows = load_azure(args.vm_src, args.requests, args.hours,
                               args.deadline_margin, args.seed,
@@ -457,6 +477,8 @@ def main():
         "vm_source": str(args.vm_src) if args.vm_src else "synthetic",
         "vm_category": args.vm_category or "all",
         "min_duration_h": args.min_duration_h,
+        "top_core_bucket": TOP_CORE_BUCKET,
+        "top_memory_bucket_gb": TOP_MEMORY_BUCKET,
     })
 
     # Sanity summary: if the spread across regions is small, no space-shifting
@@ -474,7 +496,7 @@ def main():
     # Repeatable diurnal amplitude: the spread of hour-of-day means.
     #
     # Window max-min is a poor proxy for what a deadline-bounded deferral can
-    # exploit, because it is dominated by one-off noise excursions -- it scores
+    # exploit, because it is dominated by one-off noise excursions: it scores
     # synthetic and real DE as near-identical (110% vs 116%) when their
     # exploitable structure differs by 4x. Averaging over hour-of-day cancels the
     # noise and leaves only the cycle a time-shifting policy can actually plan
