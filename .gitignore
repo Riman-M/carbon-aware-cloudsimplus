@@ -79,3 +79,5 @@ desktop.ini
 
 # Paper sources are kept out of the public repository until publication.
 paper/
+# Huawei-East-1 trace (CC-BY-NC). Fetched, not redistributed, as with Azure.
+data/huawei/

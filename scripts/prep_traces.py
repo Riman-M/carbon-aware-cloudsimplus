@@ -270,6 +270,7 @@ def load_azure(path, count, hours, margin, seed, min_duration_h, category):
 
     kept, seen, censored, too_short, out_of_window, wrong_cat = [], 0, 0, 0, 0, 0
     unparsed = 0
+    eligible = 0
     cats = {}
 
     with path.open(newline="") as fh:
@@ -322,11 +323,18 @@ def load_azure(path, count, hours, margin, seed, min_duration_h, category):
 
             rec = (arrival_h, duration_h, max(1, int(round(cores))),
                    int(round(mem_gb * 1024)))
-            # Reservoir sampling keeps memory bounded regardless of file size.
+            # Reservoir sampling (Algorithm R) keeps memory bounded regardless
+            # of file size. The replacement index is drawn over every eligible
+            # VM seen so far, which gives each one the same probability
+            # count / eligible of being kept. An earlier version drew it over
+            # the reservoir size instead, so that nearly every new VM replaced
+            # one already kept and the sample came from the last few thousand
+            # eligible rows of the file, with heavy overlap between seeds.
+            eligible += 1
             if len(kept) < count:
                 kept.append(rec)
             else:
-                j = rng.randrange(len(kept) + 1)
+                j = rng.randrange(eligible)
                 if j < count:
                     kept[j] = rec
 
@@ -343,7 +351,7 @@ def load_azure(path, count, hours, margin, seed, min_duration_h, category):
         deadline = min(hours, arrival + duration + margin)
         rows.append((i, pes, ram, duration, arrival, max(deadline, arrival + duration)))
 
-    print(f"azure: scanned {seen} rows, sampled {len(rows)}")
+    print(f"azure: scanned {seen} rows, {eligible} eligible, sampled {len(rows)}")
     print(f"  dropped: censored={censored} too_short={too_short} "
           f"outside_window={out_of_window} wrong_category={wrong_cat} "
           f"unparsable={unparsed}")
@@ -353,6 +361,104 @@ def load_azure(path, count, hours, margin, seed, min_duration_h, category):
               f"schema before trusting this sample.")
     print(f"  categories in trace: "
           + ", ".join(f"{k}={v}" for k, v in sorted(cats.items(), key=lambda x: -x[1])))
+    return rows
+
+
+def load_huawei(path, count, hours, margin, seed, min_duration_h):
+    """
+    Sample VM requests from the Huawei Cloud Huawei-East-1 trace.
+
+    Source: github.com/huaweicloud/vm-placement-dataset (CC-BY-NC). One CSV,
+    one row per event, columns vmid, cpu, memory, time, type: cores, memory in
+    GB, seconds from trace start, and 0 for creation or 1 for deletion. The
+    trace covers 30 days in East China, with 125,430 creations and 116,313
+    deletions, so it is a second provider and region for the same 30-day
+    window the Azure trace supplies.
+
+    Each VM's creation and deletion events are paired. A VM with no deletion
+    event is right-censored and dropped, for the same reason as in
+    load_azure. Core and memory counts are exact rather than bucketed. A VM
+    larger than one simulated host (32 cores, 256 GB) could never be placed,
+    so it is dropped and counted rather than truncated. The trace does not
+    record a workload category.
+
+    The dataset notes that some small VMs share physical cores at a ratio of
+    1/4 to 1/2. The simulator models every VM at full utilisation of its
+    cores, as it does for Azure, so that sharing is not represented.
+
+    Sampling is by reservoir with the given seed, over VMs in creation order.
+    """
+    import random as _random
+
+    rng = _random.Random(seed)
+    created, deleted, size = {}, {}, {}
+    with path.open(newline="") as fh:
+        reader = csv.DictReader(fh)
+        missing = {"vmid", "cpu", "memory", "time", "type"} - set(reader.fieldnames or [])
+        if missing:
+            raise SystemExit(f"{path}: missing columns {sorted(missing)}")
+        for row in reader:
+            vm, t, kind = int(row["vmid"]), float(row["time"]), int(row["type"])
+            if kind == 0:
+                if vm in created:
+                    raise SystemExit(f"{path}: VM {vm} created twice")
+                created[vm] = t
+                size[vm] = (int(row["cpu"]), int(row["memory"]))
+            elif kind == 1:
+                if vm in deleted:
+                    raise SystemExit(f"{path}: VM {vm} deleted twice")
+                deleted[vm] = t
+            else:
+                raise SystemExit(f"{path}: unknown event type {kind} for VM {vm}")
+    orphans = set(deleted) - set(created)
+    if orphans:
+        raise SystemExit(f"{path}: {len(orphans)} deletions without a creation")
+
+    kept = []
+    censored = too_short = out_of_window = too_large = 0
+    eligible = 0
+    for vm in sorted(created, key=lambda v: (created[v], v)):
+        if vm not in deleted:
+            censored += 1
+            continue
+        cores, mem_gb = size[vm]
+        if cores > HOST_CORES or mem_gb > HOST_MEMORY_GB:
+            too_large += 1
+            continue
+        duration_h = max(1, round((deleted[vm] - created[vm]) / 3600))
+        if duration_h < min_duration_h:
+            too_short += 1
+            continue
+        arrival_h = int(created[vm] // 3600)
+        if arrival_h + duration_h > hours:
+            out_of_window += 1
+            continue
+        rec = (arrival_h, duration_h, max(1, cores), int(mem_gb * 1024))
+        # Algorithm R over the eligible VMs, as in load_azure.
+        eligible += 1
+        if len(kept) < count:
+            kept.append(rec)
+        else:
+            j = rng.randrange(eligible)
+            if j < count:
+                kept[j] = rec
+
+    if len(kept) < count:
+        raise SystemExit(
+            f"only {len(kept)} of {count} requested VMs survived filtering "
+            f"(censored={censored}, too_short={too_short}, outside_window="
+            f"{out_of_window}, larger_than_host={too_large}). Lower --requests.")
+
+    kept.sort()
+    rows = []
+    for i, (arrival, duration, pes, ram) in enumerate(kept):
+        deadline = min(hours, arrival + duration + margin)
+        rows.append((i, pes, ram, duration, arrival, max(deadline, arrival + duration)))
+    demand = sum(r[3] for r in rows)
+    print(f"huawei: {len(created)} VMs created, {eligible} eligible, sampled {len(rows)}, "
+          f"demand {demand} VM-hours")
+    print(f"  dropped: censored={censored} too_short={too_short} "
+          f"outside_window={out_of_window} larger_than_host={too_large}")
     return rows
 
 
@@ -416,6 +522,9 @@ def main():
                     help="restrict to one Azure workload class")
     ap.add_argument("--region-set", choices=sorted(REAL_REGION_SETS),
                     help="named CarbonCast region set (overrides --regions)")
+    ap.add_argument("--vm-format", choices=["azure", "huawei"], default="azure",
+                    help="layout of --vm-src: the Azure V2 vmtable or the "
+                         "Huawei-East-1 event file")
     ap.add_argument("--top-core-bucket", type=float, default=TOP_CORE_BUCKET,
                     help="cores assigned to the Azure '>24' bucket (default 30)")
     ap.add_argument("--top-memory-bucket", type=float, default=TOP_MEMORY_BUCKET,
@@ -454,7 +563,13 @@ def main():
     # requests says so, since the synthetic workload shape (6-24 h uniform
     # durations, sizes drawn independently of arrival time) is an assumption,
     # not an observation.
-    if args.vm_src:
+    if args.vm_src and args.vm_format == "huawei":
+        if args.vm_category:
+            raise SystemExit("--vm-category applies to the Azure trace only; "
+                             "Huawei-East-1 records no workload class")
+        req_rows = load_huawei(args.vm_src, args.requests, args.hours,
+                               args.deadline_margin, args.seed, args.min_duration_h)
+    elif args.vm_src:
         req_rows = load_azure(args.vm_src, args.requests, args.hours,
                               args.deadline_margin, args.seed,
                               args.min_duration_h, args.vm_category)
@@ -475,6 +590,7 @@ def main():
         "gen_deadline_margin_h": args.deadline_margin,
         "seed": args.seed,
         "vm_source": str(args.vm_src) if args.vm_src else "synthetic",
+        "vm_format": args.vm_format if args.vm_src else "synthetic",
         "vm_category": args.vm_category or "all",
         "min_duration_h": args.min_duration_h,
         "top_core_bucket": TOP_CORE_BUCKET,
