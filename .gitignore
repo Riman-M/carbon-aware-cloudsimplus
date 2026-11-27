@@ -23,6 +23,7 @@ data/trace_meta.properties
 data/subsets/sub*/
 data/holdout-*/h*/
 data/wl_seed*/
+data/wl_huawei_seed*/
 
 # ---------------------------------------------------------------
 # Results.

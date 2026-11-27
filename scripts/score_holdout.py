@@ -11,9 +11,16 @@ Before scoring, the predictions file is checked against the SHA-256 recorded
 in the criteria file, so a prediction edited after the run cannot be scored
 as if it were the original.
 
+Each seed's observed mean load (VM-hours / 720) must equal the load written
+into the criteria file, so that a run on a different workload sample is not
+scored against predictions computed for another.
+
 Usage:
     python scripts/score_holdout.py
+    python scripts/score_holdout.py --pred predictions/holdout-b-azure-predictions.csv \
+        --results results/holdout-b/azure
 """
+import argparse
 import glob
 import hashlib
 import os
@@ -25,12 +32,16 @@ import numpy as np
 import pandas as pd
 from scipy import stats
 
-PRED = Path("predictions/holdout-predictions.csv")
-CRIT = Path("predictions/holdout-criteria.txt")
-RESULTS = Path("results/holdout")
-
-
 def main():
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--pred", type=Path, default=Path("predictions/holdout-predictions.csv"))
+    ap.add_argument("--criteria", type=Path)
+    ap.add_argument("--results", type=Path, default=Path("results/holdout"))
+    args = ap.parse_args()
+    PRED, RESULTS = args.pred, args.results
+    CRIT = args.criteria or PRED.with_name(
+        PRED.name.replace("predictions", "criteria").replace(".csv", ".txt"))
     recorded = re.search(r"sha256: ([0-9a-f]{64})", CRIT.read_text()).group(1)
     # Line endings are normalised, as in predict_holdout.py.
     actual = hashlib.sha256(PRED.read_bytes().replace(b"\r\n", b"\n")).hexdigest()
@@ -40,7 +51,7 @@ def main():
 
     frames = []
     for p in sorted(glob.glob(str(RESULTS / "h*-seed*.csv"))):
-        m = re.match(r"(h\d-\d+)-seed(\d+)\.csv", os.path.basename(p))
+        m = re.match(r"(h[0-9a-z]+-\d+)-seed(\d+)\.csv", os.path.basename(p))
         df = pd.read_csv(p)
         df["set"], df["seed"] = m.group(1), int(m.group(2))
         frames.append(df)
@@ -49,6 +60,20 @@ def main():
     obs = pd.concat(frames, ignore_index=True)
     print(f"result files: {len(frames)} (expected 60), sets {obs.set.nunique()}, "
           f"seeds {sorted(obs.seed.unique())}")
+
+    line = re.search(r"workload seeds and mean loads: (.+)", CRIT.read_text()).group(1)
+    expected = {int(k): float(v) for k, v in (kv.split("=") for kv in line.split(", "))}
+    # Every result file is checked, not one per seed, so that a single file run
+    # on a different sample cannot pass unnoticed.
+    per_file = obs.groupby(["set", "seed"]).vm_hours.first() / 720
+    for (set_name, seed), load in per_file.items():
+        if seed not in expected or abs(load - expected[seed]) > 0.006:
+            raise SystemExit(f"{set_name} seed {seed}: observed load {load:.3f} differs "
+                             f"from the pre-registered {expected.get(seed)}; this run "
+                             f"used a different workload sample")
+    observed = per_file.groupby(level="seed").first().to_dict()
+    print("workload loads match the pre-registration: "
+          + ", ".join(f"{k}={v:.2f}" for k, v in sorted(observed.items())))
 
     bad = obs[~obs.placement_valid | (obs.late_vms > 0)]
     if len(bad):

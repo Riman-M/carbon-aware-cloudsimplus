@@ -1,0 +1,16 @@
+Pre-registered criteria for the hold-out region sets
+Written by scripts/predict_holdout.py before any hold-out set was simulated.
+
+hold-out sets: data/holdout-b-4, data/holdout-b-6
+workload: loads of the subset results
+calibration: results/subsets (seed loads 1=40.94, 2=42.84, 3=47.23)
+predictions file: predictions/holdout-b-azure-predictions.csv
+sha256: 6184c8e845d4857de77e3709c5ddfee5034907e72884497eae3223097d24b960
+workload seeds and mean loads: 1=40.94, 2=42.84, 3=47.23
+cells: 80 (20 sets x 4 capacity levels)
+
+Primary basis: dynamic. Policy: space against round-robin.
+C1  MAE of calibrated prediction <= 5.0 percentage points
+C2  Pearson r(calibrated prediction, observed) >= 0.9
+C3  95 % CI of slope (observed on raw H_c) contains 1.0
+All criteria are reported on both bases whatever the outcome.

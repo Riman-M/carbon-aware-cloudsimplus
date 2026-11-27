@@ -105,6 +105,19 @@ def seed_loads(results_dir):
     return loads
 
 
+def workload_loads(dirs):
+    """Mean concurrent load per seed from sampled workloads, for a trace whose
+    sets have not been simulated. The seed is read from the folder name."""
+    loads = {}
+    for d in dirs:
+        m = re.search(r"seed(\d+)", d.name)
+        if not m:
+            raise SystemExit(f"cannot read a seed number from {d}")
+        w = pd.read_csv(d / "vm_requests.csv")
+        loads[int(m.group(1))] = w.duration_h.sum() / 720.0
+    return loads
+
+
 def calibration(results_dir, subset_dir, loads, mean):
     desc = pd.read_csv(subset_dir / "subsets.csv")
     regs = dict(zip(desc.set, desc.regions.str.split("|")))
@@ -115,8 +128,15 @@ def calibration(results_dir, subset_dir, loads, mean):
         df["set"], df["seed"] = m.group(1), int(m.group(2))
         frames.append(df)
     c = pd.concat(frames, ignore_index=True)
+    # Only round-robin and space enter the calibration. Rows of other
+    # policies may fail the placement check (space+time fallbacks planned past
+    # the window in the saturated row) without affecting it, but a failing row
+    # of either calibration policy stops the run.
+    c = c[c.policy.isin(["round-robin", "space"])]
     if (~c.placement_valid).any():
-        raise SystemExit("subset results contain rows failing the placement check")
+        bad = c[~c.placement_valid]
+        raise SystemExit("calibration rows fail the placement check:\n"
+                         + bad[["set", "seed", "policy", "total_capacity"]].to_string(index=False))
     k = ["set", "seed", "total_capacity"]
     rr = c[c.policy == "round-robin"].set_index(k)
     sp = c[c.policy == "space"].set_index(k)
@@ -144,13 +164,23 @@ def main():
     ap.add_argument("--holdout", type=Path, nargs="+",
                     default=[Path("data/holdout-4"), Path("data/holdout-6")])
     ap.add_argument("--out", type=Path, default=Path("predictions/holdout-predictions.csv"))
+    ap.add_argument("--workload-dirs", type=Path, nargs="*", default=[],
+                    help="per-seed workload folders (seed number in the folder name) "
+                         "whose vm_requests.csv supplies the mean load; when omitted, "
+                         "loads are read from the subset results, as for Azure")
+    ap.add_argument("--criteria", type=Path,
+                    help="criteria file to write (default: beside --out, "
+                         "named after it)")
     args = ap.parse_args()
 
     set_dirs = [d for root in [args.subsets, *args.holdout]
                 for d in sorted(root.iterdir()) if d.is_dir()]
     mean = region_means(set_dirs)
-    loads = seed_loads(args.results)
-    fits = calibration(args.results, args.subsets, loads, mean)
+    # The calibration is always fitted on the subset results with their own
+    # loads; the predictions use the loads of the workload being predicted.
+    calib_loads = seed_loads(args.results)
+    fits = calibration(args.results, args.subsets, calib_loads, mean)
+    loads = workload_loads(args.workload_dirs) if args.workload_dirs else calib_loads
 
     rows = []
     for root in args.holdout:
@@ -177,10 +207,15 @@ def main():
     out.to_csv(args.out, index=False)
     digest = content_hash(args.out)
 
-    crit = args.out.with_name("holdout-criteria.txt")
+    crit = args.criteria or args.out.with_name(
+        args.out.name.replace("predictions", "criteria").replace(".csv", ".txt"))
     crit.write_text(
         "Pre-registered criteria for the hold-out region sets\n"
         "Written by scripts/predict_holdout.py before any hold-out set was simulated.\n\n"
+        f"hold-out sets: {', '.join(d.as_posix() for d in args.holdout)}\n"
+        f"workload: {'sampled workloads in ' + ', '.join(d.as_posix() for d in args.workload_dirs) if args.workload_dirs else 'loads of the subset results'}\n"
+        f"calibration: {args.results.as_posix()} (seed loads "
+        + ", ".join(f"{k}={v:.2f}" for k, v in sorted(calib_loads.items())) + ")\n"
         f"predictions file: {args.out.as_posix()}\n"
         f"sha256: {digest}\n"
         f"workload seeds and mean loads: "

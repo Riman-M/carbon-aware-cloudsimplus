@@ -449,7 +449,9 @@ def main():
                     headline(f"linear_origin_ratio_cap{cap}_m{m}", basis, ratio2)
 
     published = Path("results/robust")
-    if published.exists() and base != published:
+    # The comparison with the submitted pass is meaningful only for the Azure
+    # revision pass itself, not for the Huawei arms analysed by the same script.
+    if published.exists() and base.name == "r1":
         section("Published pass (results/robust, fleet sized from 200 slots) against r1, attributed basis")
         old_full = load(published, "us_full")
         old_home = load(published, "us_home")

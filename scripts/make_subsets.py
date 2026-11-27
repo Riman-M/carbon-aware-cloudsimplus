@@ -79,6 +79,9 @@ def main():
     ap.add_argument("--bins", type=int, default=4,
                     help="strata per axis on log dominance and log spread")
     ap.add_argument("--seed", type=int, default=2026)
+    ap.add_argument("--exclude", type=Path, nargs="*", default=[],
+                    help="index files (subsets.csv) whose region sets may not be "
+                         "drawn again, so that a new hold-out round is unseen")
     ap.add_argument("--prefix", default="sub",
                     help="set name prefix; the hold-out sets use h4- and h6-")
     args = ap.parse_args()
@@ -90,8 +93,16 @@ def main():
         series.setdefault(r, []).append(ci)
     mean = {r: sum(v) / len(v) for r, v in series.items()}
 
+    used = set()
+    for idx in args.exclude:
+        with idx.open(newline="") as fh:
+            for row in csv.DictReader(fh):
+                used.add(frozenset(row["regions"].split("|")))
+
     cands = []
     for combo in itertools.combinations(regions, args.size):
+        if frozenset(combo) in used:
+            continue
         d = descriptors([mean[r] for r in combo])
         d["regions"] = combo
         cands.append(d)
